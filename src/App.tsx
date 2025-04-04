@@ -8,6 +8,21 @@ interface RelayInfo {
   type: string;
 }
 
+interface EventSyncStatus {
+  eventId: string;
+  presentInRelays: Set<string>;
+  created_at: number;
+}
+
+interface SyncStatus {
+  isSyncing: boolean;
+  progress: {
+    totalEvents: number;
+    syncedEvents: number;
+    failedRelays: string[];
+  };
+}
+
 const defaultRelays = [
   'wss://relay.damus.io/',
   'wss://hbr.coracle.social/',
@@ -43,12 +58,85 @@ async function fetchOutboxRelays(pubkey: string, relays: string[] | null): Promi
   }
 }
 
+async function syncEvents(pubkey: string, relays: RelayInfo[]): Promise<SyncStatus> {
+  const writeRelays = relays.filter(r => r.type.includes('Write'));
+  const eventMap = new Map<string, EventSyncStatus>();
+  const failedRelays = new Set<string>();
+
+  // 1. 각 쓰기 릴레이에서 최신 이벤트 10개씩 가져오기
+  const pool = new SimplePool();
+  try {
+    for (const relay of writeRelays) {
+      try {
+        // 최신 10개의 이벤트를 가져오기 위해 since 파라미터를 조정
+        const now = Math.floor(Date.now() / 1000);
+        const since = now - (7 * 24 * 60 * 60); // 최근 7일
+        
+        const event = await pool.get([relay.url], {
+          kinds: [1], // 텍스트 노트
+          authors: [pubkey],
+          since: since,
+          limit: 10
+        });
+
+        if (event) {
+          if (!eventMap.has(event.id)) {
+            eventMap.set(event.id, {
+              eventId: event.id,
+              presentInRelays: new Set([relay.url]),
+              created_at: event.created_at
+            });
+          } else {
+            eventMap.get(event.id)?.presentInRelays.add(relay.url);
+          }
+        }
+      } catch (e) {
+        console.error(`Error fetching events from ${relay.url}:`, e);
+        failedRelays.add(relay.url);
+      }
+    }
+
+    // 2. 이벤트 동기화
+    const eventsToSync = Array.from(eventMap.values())
+      .sort((a, b) => b.created_at - a.created_at);
+
+    for (const eventStatus of eventsToSync) {
+      const missingRelays = writeRelays
+        .filter(r => !eventStatus.presentInRelays.has(r.url))
+        .filter(r => !failedRelays.has(r.url));
+
+      for (const relay of missingRelays) {
+        try {
+          // TODO: 이벤트 전송 및 OK 응답 대기 로직 구현
+          // 이 부분은 nostr-tools의 publish 메서드를 사용하거나
+          // WebSocket 직접 구현이 필요할 수 있습니다
+        } catch (e) {
+          console.error(`Error syncing event ${eventStatus.eventId} to ${relay.url}:`, e);
+          failedRelays.add(relay.url);
+        }
+      }
+    }
+
+    return {
+      isSyncing: false,
+      progress: {
+        totalEvents: eventsToSync.length,
+        syncedEvents: eventsToSync.length,
+        failedRelays: Array.from(failedRelays)
+      }
+    };
+  } finally {
+    pool.destroy();
+  }
+}
+
 function App() {
   const [input, setInput] = useState('');
   const [decodedHex, setDecodedHex] = useState<string | null>(null);
   const [relays, setRelays] = useState<string[] | null>(null);
   const [outboxRelays, setOutboxRelays] = useState<RelayInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
 
   const handleDecode = async () => {
     try {
@@ -85,10 +173,16 @@ function App() {
     }
   };
 
+  const handleSync = async () => {
+    if (!decodedHex || !outboxRelays) return;
+    
+    setSyncStatus({ isSyncing: true, progress: { totalEvents: 0, syncedEvents: 0, failedRelays: [] } });
+    const status = await syncEvents(decodedHex, outboxRelays);
+    setSyncStatus(status);
+  };
+
   return (
     <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
-
-
       <h2>NIP-19 디코더</h2>
       <input
         type="text"
@@ -128,6 +222,32 @@ function App() {
                 {relay.url} <span style={{ color: '#666' }}>({relay.type})</span>
               </li>
             ))}
+          </ul>
+          <button 
+            onClick={handleSync} 
+            style={{ marginTop: '1rem', padding: '0.5rem 1rem' }}
+            disabled={syncStatus?.isSyncing}
+          >
+            {syncStatus?.isSyncing ? '동기화 중...' : '동기화 시작'}
+          </button>
+        </div>
+      )}
+
+      {syncStatus && (
+        <div style={{ marginTop: '1rem' }}>
+          <strong>🔄 동기화 상태:</strong>
+          <ul style={{ background: '#f8f8f8', padding: '1rem' }}>
+            <li>총 이벤트: {syncStatus.progress.totalEvents}</li>
+            <li>동기화 완료: {syncStatus.progress.syncedEvents}</li>
+            {syncStatus.progress.failedRelays.length > 0 && (
+              <li>실패한 릴레이:
+                <ul>
+                  {syncStatus.progress.failedRelays.map((relay, idx) => (
+                    <li key={idx}>{relay}</li>
+                  ))}
+                </ul>
+              </li>
+            )}
           </ul>
         </div>
       )}
