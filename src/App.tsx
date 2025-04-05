@@ -82,11 +82,10 @@ async function fetchOutboxRelays(
   }
 }
 
-// --- syncEvents 수정 ---
 async function syncEvents(
   pubkey: string,
   allRelaysInfo: RelayInfo[],
-  updateProgress: (progress: SyncProgress) => void
+  updateProgress: (progress: SyncProgress) => void,
 ): Promise<boolean> {
   const writeRelayUrls = allRelaysInfo.filter(isWriteRelay).map((r) => r.url);
 
@@ -104,8 +103,7 @@ async function syncEvents(
   });
   console.log('Starting sync for', pubkey, 'on write relays:', writeRelayUrls);
 
-  // v2 SimplePool 생성 (옵션 확인 필요)
-  const syncPool = new SimplePool(/* Pool 옵션 */);
+  const syncPool = new SimplePool();
   syncPool.trackRelays = true;
   let syncUntilTimestamp = Math.floor(Date.now() / 1000);
   const batchSize = 3;
@@ -121,7 +119,7 @@ async function syncEvents(
       });
 
       const filter: Filter = {
-        kinds: [1], // Only sync notes
+        kinds: [1],
         authors: [pubkey],
         until: syncUntilTimestamp, // Get events strictly older than this timestamp
         limit: batchSize,
@@ -129,23 +127,13 @@ async function syncEvents(
 
       let events: Event[] = [];
       try {
-        // --- 여기가 핵심 변경점: list 대신 querySync 사용 ---
-        // querySync는 EOSE를 기다린 후 이벤트 배열 반환
-        // maxWait 같은 옵션이 있다면 추가 (v2 API 확인)
+        console.log(`Querying relays ${writeRelayUrls.join(', ')}`);
+        events = await syncPool.querySync(writeRelayUrls, filter);
         console.log(
-          `Querying relays ${writeRelayUrls.join(', ')} with filter:`,
-          filter
-        );
-        events = await syncPool.querySync(
-          writeRelayUrls,
-          filter /*, { maxWait: 15000 } - 옵션 확인 */
-        );
-        console.log(
-          `Fetched ${events.length} events for batch before ${syncUntilTimestamp}`
+          `Fetched ${events.length} events for batch before ${syncUntilTimestamp}`,
         );
       } catch (queryError: any) {
         console.error('Error fetching event batch with querySync:', queryError);
-        // querySync가 타임아웃 등으로 실패할 수 있음
         updateProgress({
           status: 'error',
           message: `Error fetching event batch: ${queryError.message || queryError}`,
@@ -163,49 +151,38 @@ async function syncEvents(
           message: `Sync complete! No more older events found. Total synced: ${totalSyncedCount}`,
         });
         console.log('Sync complete for', pubkey);
-        break; // 동기화 완료
+        break;
       }
 
-      // 최신순 정렬 (querySync 결과 순서가 보장되지 않을 수 있음)
       events.sort((a, b) => b.created_at - a.created_at);
 
       const batchOldestTimestamp = events[events.length - 1].created_at;
 
       for (const event of events) {
-        // --- 동일 이벤트 재 동기화 방지 (선택적 최적화) ---
-        // 만약 특정 릴레이가 다운되어 이전에 실패했다가 다시 시도하는 경우 필요할 수 있지만,
-        // 기본적으로는 publish는 멱등적(idempotent)이므로 그냥 발행해도 문제는 없음.
-        // const alreadySynced = await checkEventOnAllRelays(syncPool, writeRelayUrls, event.id);
-        // if (alreadySynced) continue;
-        // ---------------------------------------------
-
         updateProgress({
           status: 'syncing_event',
           message: `Syncing event ${event.id.substring(0, 8)}... (created: ${new Date(event.created_at * 1000).toLocaleString()})`,
           currentEventId: event.id,
-          syncedUntilTimestamp: syncUntilTimestamp, // 어디까지 동기화 시도 중인지 표시
+          syncedUntilTimestamp: syncUntilTimestamp,
         });
         console.log(
-          `Attempting to publish event ${event.id} to ${writeRelayUrls.length} relays.`
+          `Attempting to sync event ${event.id} to ${writeRelayUrls.length} relays.`,
         );
 
         const shownRelay = syncPool.seenOn.get(event.id);
         const shownRelayList = Array.from(shownRelay as Set<AbstractRelay>).map(
-          (x) => x.url
+          (x) => x.url,
         );
         const relayThatDoesNotHaveThisEvent = writeRelayUrls.filter(
-          (item) => !shownRelayList.includes(item)
+          (item) => !shownRelayList.includes(item),
         );
 
         try {
-          // --- publish 사용 (v2 SimplePool의 publish API 확인 필요) ---
-          // v2의 publish는 Promise<string>[] 를 반환할 수도 있고, 다른 방식일 수도 있음. 제공된 코드는 Promise<string>[] 형태.
           const publishPromises = syncPool.publish(
             relayThatDoesNotHaveThisEvent,
-            event
+            event,
           );
 
-          // Promise.allSettled 로 모든 결과 확인
           const results = await Promise.allSettled(publishPromises);
 
           const failedRelays: string[] = [];
@@ -214,13 +191,13 @@ async function syncEvents(
               failedRelays.push(writeRelayUrls[index]);
               console.error(
                 `Failed to publish event ${event.id} to relay ${writeRelayUrls[index]}:`,
-                result.reason
+                result.reason,
               );
             } else {
               // 성공 응답 (v2 publish 가 반환하는 값 확인)
               // result.value 가 'ok' 문자열이거나 다른 형태일 수 있음
               console.log(
-                `Publish confirmed/sent for event ${event.id} to relay ${writeRelayUrls[index]}: ${result.value}`
+                `Publish confirmed/sent for event ${event.id} to relay ${writeRelayUrls[index]}: ${result.value}`,
               );
             }
           });
@@ -279,7 +256,7 @@ async function syncEvents(
         console.log(
           'Sync complete for',
           pubkey,
-          '- likely reached end of history.'
+          '- likely reached end of history.',
         );
         break;
       }
