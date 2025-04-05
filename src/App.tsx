@@ -1,6 +1,5 @@
 import { SimplePool, Event, Filter } from 'nostr-tools'; // EventTemplate, VerifiedEvent 추가 (필요시)
 import { nip19 } from 'nostr-tools';
-import { AbstractRelay } from 'nostr-tools/abstract-relay';
 import React, { useState, useCallback } from 'react';
 
 interface RelayInfo {
@@ -50,7 +49,7 @@ interface SyncProgress {
 
 async function fetchOutboxRelays(
   pubkey: string,
-  relays: string[] | null
+  relays: string[] | null,
 ): Promise<RelayInfo[] | null> {
   const relaysToQuery = relays && relays.length > 0 ? relays : defaultRelays;
   const pool = new SimplePool();
@@ -169,35 +168,50 @@ async function syncEvents(
           `Attempting to sync event ${event.id} to ${writeRelayUrls.length} relays.`,
         );
 
-        const shownRelay = syncPool.seenOn.get(event.id);
-        const shownRelayList = Array.from(shownRelay as Set<AbstractRelay>).map(
-          (x) => x.url,
+        const relaysThatHaveEvent = syncPool.seenOn.get(event.id); // Get the Set<AbstractRelay>
+
+        // Handle cases where seenOn might not have the entry (though unlikely if querySync returned it)
+        // Or if the Set is unexpectedly empty. Default to empty array if not found.
+        const urlsThatHaveEvent = relaysThatHaveEvent
+          ? Array.from(relaysThatHaveEvent).map((r) => r.url)
+          : [];
+
+        // Target only the write relays that *don't* have the event according to seenOn
+        const relaysToPublishTo = writeRelayUrls.filter(
+          (url) => !urlsThatHaveEvent.includes(url),
         );
-        const relayThatDoesNotHaveThisEvent = writeRelayUrls.filter(
-          (item) => !shownRelayList.includes(item),
+
+        // If all write relays already have the event according to seenOn, skip publishing
+        if (relaysToPublishTo.length === 0) {
+          console.log(
+            `Event ${event.id.substring(0, 8)} already exists on all target write relays according to seenOn.`,
+          );
+          totalSyncedCount++;
+          continue;
+        }
+
+        console.log(
+          `Publishing event ${event.id.substring(0, 8)} to ${relaysToPublishTo.length} relays: ${relaysToPublishTo.join(', ')}`,
         );
 
         try {
-          const publishPromises = syncPool.publish(
-            relayThatDoesNotHaveThisEvent,
-            event,
-          );
+          const publishPromises = syncPool.publish(relaysToPublishTo, event);
 
           const results = await Promise.allSettled(publishPromises);
 
           const failedRelays: string[] = [];
           results.forEach((result, index) => {
             if (result.status === 'rejected') {
-              failedRelays.push(writeRelayUrls[index]);
+              const failedUrl = relaysToPublishTo[index];
+              failedRelays.push(failedUrl);
               console.error(
-                `Failed to publish event ${event.id} to relay ${writeRelayUrls[index]}:`,
+                `Failed to publish event ${event.id.substring(0, 8)} to relay ${failedUrl}:`,
                 result.reason,
               );
             } else {
-              // 성공 응답 (v2 publish 가 반환하는 값 확인)
-              // result.value 가 'ok' 문자열이거나 다른 형태일 수 있음
+              const successUrl = relaysToPublishTo[index];
               console.log(
-                `Publish confirmed/sent for event ${event.id} to relay ${writeRelayUrls[index]}: ${result.value}`,
+                `Publish confirmed/sent for event ${event.id.substring(0, 8)} to relay ${successUrl}: ${result.value}`,
               );
             }
           });
@@ -212,9 +226,9 @@ async function syncEvents(
             });
             console.error(errorMsg);
             allSynced = false;
-            break; // 요청대로 즉시 중단
+            break;
           } else {
-            totalSyncedCount++; // 성공적으로 동기화된 이벤트 수 증가
+            totalSyncedCount++;
           }
         } catch (publishError: any) {
           const errorMsg = `Unexpected error publishing event ${event.id}: ${publishError.message || publishError}. Stopping sync.`;
@@ -231,7 +245,7 @@ async function syncEvents(
       } // End of for (const event of events)
 
       if (!allSynced) {
-        break; // 에러 발생 시 외부 루프 종료
+        break;
       }
 
       // 다음 배치를 위해 타임스탬프 업데이트
@@ -245,7 +259,7 @@ async function syncEvents(
       });
 
       // 릴레이 부하 감소를 위한 짧은 지연 (선택 사항)
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, 2500));
 
       // 만약 가져온 이벤트 수가 요청한 batchSize보다 적다면, 거의 끝에 도달했다는 의미
       if (events.length < batchSize) {
