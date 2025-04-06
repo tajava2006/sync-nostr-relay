@@ -148,17 +148,17 @@ async function syncEvents(
         limit: batchSize,
       };
 
-      let events: Event[] = [];
+      let eventsBeforeSliced: Event[] = [];
       try {
         // Fetch events from all write relays using querySync
         console.log(`Querying relays ${writeRelayUrls.join(', ')}`);
         // querySync waits for EOSE from all relays before returning events
-        events = await syncPool.querySync(
+        eventsBeforeSliced = await syncPool.querySync(
           writeRelayUrls,
           filter /* Add options like { maxWait: ... } if needed */,
         );
         console.log(
-          `Fetched ${events.length} events for batch before ${syncUntilTimestamp}`,
+          `Fetched ${eventsBeforeSliced.length} events for batch before ${syncUntilTimestamp}`,
         );
       } catch (queryError: any) {
         console.error('Error fetching event batch with querySync:', queryError);
@@ -174,7 +174,7 @@ async function syncEvents(
       }
 
       // Check if no more events were found in the specified time range
-      if (events.length === 0) {
+      if (eventsBeforeSliced.length === 0) {
         updateProgress({
           status: 'complete',
           message: `Sync complete! No more older events found. Total synced: ${totalSyncedCount}`,
@@ -184,10 +184,15 @@ async function syncEvents(
         break; // Exit the loop, sync finished
       }
 
-      // Sort events newest first within the batch for processing order (optional but consistent)
-      events.sort((a, b) => b.created_at - a.created_at);
+      // Sort events newest first to prepare for slicing
+      eventsBeforeSliced.sort((a, b) => b.created_at - a.created_at);
 
-      // Store the timestamp of the oldest event in this batch for the next iteration
+      // Slice the fetched events to the target batch size. This prevents skipping events if one relay
+      // provides much older events than another within the querySync limit, ensuring the next 'until'
+      // timestamp is based on processed data
+      const events = eventsBeforeSliced.slice(0, batchSize);
+
+      // Calculate the timestamp for the next iteration based on the *sliced* batch
       const batchOldestTimestamp = events[events.length - 1].created_at;
 
       // Process each event in the fetched batch
