@@ -105,7 +105,7 @@ async function syncEvents(
   const syncPool = new SimplePool();
   syncPool.trackRelays = true;
   let syncUntilTimestamp = Math.floor(Date.now() / 1000);
-  const batchSize = 3;
+  const batchSize = 20;
   let allSynced = true;
   let totalSyncedCount = 0;
 
@@ -242,6 +242,8 @@ async function syncEvents(
           allSynced = false;
           break;
         }
+        // 릴레이 부하 감소를 위한 짧은 지연 (선택 사항)
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
       } // End of for (const event of events)
 
       if (!allSynced) {
@@ -259,7 +261,7 @@ async function syncEvents(
       });
 
       // 릴레이 부하 감소를 위한 짧은 지연 (선택 사항)
-      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
 
       // 만약 가져온 이벤트 수가 요청한 batchSize보다 적다면, 거의 끝에 도달했다는 의미
       if (events.length < batchSize) {
