@@ -1,4 +1,4 @@
-import { SimplePool, Event, Filter } from 'nostr-tools'; // EventTemplate, VerifiedEvent 추가 (필요시)
+import { SimplePool, Event, Filter } from 'nostr-tools';
 import { nip19 } from 'nostr-tools';
 import React, { useState, useCallback } from 'react';
 
@@ -7,6 +7,7 @@ interface RelayInfo {
   type: string;
 }
 
+// Default relays to use if user relay is not found or doesn't provide hints
 const defaultRelays = [
   'wss://relay.damus.io/',
   'wss://hbr.coracle.social/',
@@ -15,22 +16,27 @@ const defaultRelays = [
   'wss://relay.nostr.band/',
 ];
 
+// Helper function to check if a relay is marked for writing
 const isWriteRelay = (relayInfo: RelayInfo): boolean => {
   return relayInfo.type.includes('Write');
 };
 
+// Helper function to check if a relay is marked for both read and write
 const isDoubleRelay = (relayInfo: RelayInfo): boolean => {
   return relayInfo.type === '📖✍️ Read/Write';
 };
 
+// Helper function to check if a relay is marked write-only
 const isWriteOnlyRelay = (relayInfo: RelayInfo): boolean => {
   return relayInfo.type === '✍️ Write';
 };
 
+// Helper function to check if a relay is marked read-only
 const isReadOnlyRelay = (relayInfo: RelayInfo): boolean => {
   return relayInfo.type === '📖 Read';
 };
 
+// Define possible statuses for the sync process
 type SyncStatus =
   | 'idle'
   | 'fetching_relays'
@@ -39,14 +45,17 @@ type SyncStatus =
   | 'batch_complete'
   | 'error'
   | 'complete';
+
+// Interface for the sync progress state object
 interface SyncProgress {
   status: SyncStatus;
   message: string;
-  syncedUntilTimestamp?: number;
-  currentEventId?: string;
-  errorDetails?: string;
+  syncedUntilTimestamp?: number; // Timestamp until which events have been processed
+  currentEventId?: string; // ID of the event currently being synced
+  errorDetails?: string; // Specific reason for an error
 }
 
+// Fetches the user's NIP-65 relay list (kind:10002)
 async function fetchOutboxRelays(
   pubkey: string,
   relays: string[] | null,
@@ -54,140 +63,166 @@ async function fetchOutboxRelays(
   const relaysToQuery = relays && relays.length > 0 ? relays : defaultRelays;
   const pool = new SimplePool();
   try {
+    // Get the latest NIP-65 event
     const event = await pool.get(relaysToQuery, {
       kinds: [10002],
       authors: [pubkey],
+      // limit: 1 // SimplePool's get already implies limit 1 based on latest
     });
 
     if (event && event.tags) {
+      // Parse the 'r' tags into RelayInfo objects
       const relayInfo = event.tags
-        .filter((tag: string[]) => tag[0] === 'r')
+        .filter((tag: string[]) => tag[0] === 'r' && typeof tag[1] === 'string') // Ensure tag[1] is a string URL
         .map((tag: string[]) => ({
           url: tag[1],
-          type: tag[2]
+          type: tag[2] // Check marker if present
             ? tag[2] === 'read'
               ? '📖 Read'
               : '✍️ Write'
-            : '📖✍️ Read/Write',
+            : '📖✍️ Read/Write', // Default to read/write if no marker
         }));
-      return relayInfo;
+      return relayInfo.length > 0 ? relayInfo : null; // Return null if no valid 'r' tags found
     }
-    return null;
+    return null; // No NIP-65 event found
   } catch (e) {
     console.error('Outbox relay fetch error:', e);
     return null;
   } finally {
+    // Ensure pool resources are released
     pool.destroy();
   }
 }
 
+// Main function to synchronize past events (kind:1 notes)
 async function syncEvents(
   pubkey: string,
   allRelaysInfo: RelayInfo[],
   updateProgress: (progress: SyncProgress) => void,
 ): Promise<boolean> {
+  // Identify target relays marked for writing
   const writeRelayUrls = allRelaysInfo.filter(isWriteRelay).map((r) => r.url);
 
   if (writeRelayUrls.length === 0) {
+    // Update progress and return if no write relays are configured
     updateProgress({
       status: 'error',
       message: 'Error: No write relays found in NIP-65 list.',
+      // No timestamp to keep here as sync didn't start
     });
     return false;
   }
 
+  // Create a pool for the sync process and enable tracking
+  const syncPool = new SimplePool();
+  syncPool.trackRelays = true; // Enable tracking which relays have which events
+
+  // Initialize pagination timestamp and counters
+  let syncUntilTimestamp = Math.floor(Date.now() / 1000);
+  const batchSize = 20; // Number of events to fetch per batch
+  let allSynced = true; // Flag to track if the process completed without errors
+  let totalSyncedCount = 0; // Counter for successfully synced/verified events
+
   updateProgress({
-    status: 'fetching_batch',
+    status: 'fetching_batch', // Initial status before loop
     message: `Identified ${writeRelayUrls.length} write relays. Starting sync...`,
+    syncedUntilTimestamp: syncUntilTimestamp, // Set initial timestamp
   });
   console.log('Starting sync for', pubkey, 'on write relays:', writeRelayUrls);
 
-  const syncPool = new SimplePool();
-  syncPool.trackRelays = true;
-  let syncUntilTimestamp = Math.floor(Date.now() / 1000);
-  const batchSize = 20;
-  let allSynced = true;
-  let totalSyncedCount = 0;
-
   try {
+    // Main loop for paginated fetching and syncing
     while (true) {
+      // Update progress for the current batch fetch
       updateProgress({
         status: 'fetching_batch',
         message: `Fetching max ${batchSize} notes before ${new Date(syncUntilTimestamp * 1000).toLocaleString()}... (Total synced: ${totalSyncedCount})`,
-        syncedUntilTimestamp: syncUntilTimestamp,
+        syncedUntilTimestamp: syncUntilTimestamp, // Pass current timestamp
       });
 
+      // Define the filter for fetching the next batch of events
       const filter: Filter = {
-        kinds: [1],
+        kinds: [1], // Only sync notes
         authors: [pubkey],
-        until: syncUntilTimestamp, // Get events strictly older than this timestamp
+        until: syncUntilTimestamp, // Fetch events older than this timestamp
         limit: batchSize,
       };
 
       let events: Event[] = [];
       try {
+        // Fetch events from all write relays using querySync
         console.log(`Querying relays ${writeRelayUrls.join(', ')}`);
-        events = await syncPool.querySync(writeRelayUrls, filter);
+        // querySync waits for EOSE from all relays before returning events
+        events = await syncPool.querySync(
+          writeRelayUrls,
+          filter /* Add options like { maxWait: ... } if needed */,
+        );
         console.log(
           `Fetched ${events.length} events for batch before ${syncUntilTimestamp}`,
         );
       } catch (queryError: any) {
         console.error('Error fetching event batch with querySync:', queryError);
+        // Update progress on fetch error, preserving the last known timestamp
         updateProgress({
           status: 'error',
-          message: `Error fetching event batch: ${queryError.message || queryError}`,
+          message: `Error fetching event batch.`,
+          syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp
+          errorDetails: queryError.message || String(queryError), // Add error details
         });
         allSynced = false;
-        break;
+        break; // Exit the loop on fetch error
       }
 
-      // test
-      // break;
-
+      // Check if no more events were found in the specified time range
       if (events.length === 0) {
         updateProgress({
           status: 'complete',
           message: `Sync complete! No more older events found. Total synced: ${totalSyncedCount}`,
+          syncedUntilTimestamp: syncUntilTimestamp, // Keep the final timestamp
         });
         console.log('Sync complete for', pubkey);
-        break;
+        break; // Exit the loop, sync finished
       }
 
+      // Sort events newest first within the batch for processing order (optional but consistent)
       events.sort((a, b) => b.created_at - a.created_at);
 
+      // Store the timestamp of the oldest event in this batch for the next iteration
       const batchOldestTimestamp = events[events.length - 1].created_at;
 
+      // Process each event in the fetched batch
       for (const event of events) {
+        // Update progress for the specific event being processed
         updateProgress({
           status: 'syncing_event',
           message: `Syncing event ${event.id.substring(0, 8)}... (created: ${new Date(event.created_at * 1000).toLocaleString()})`,
           currentEventId: event.id,
-          syncedUntilTimestamp: syncUntilTimestamp,
+          syncedUntilTimestamp: syncUntilTimestamp, // Keep timestamp during sync
         });
         console.log(
-          `Attempting to sync event ${event.id} to ${writeRelayUrls.length} relays.`,
+          `Attempting to sync event ${event.id} to ${writeRelayUrls.length} target relays.`,
         );
 
-        const relaysThatHaveEvent = syncPool.seenOn.get(event.id); // Get the Set<AbstractRelay>
+        // Get the set of relays known to have seen this event
+        const relaysThatHaveEventSet = syncPool.seenOn.get(event.id);
 
-        // Handle cases where seenOn might not have the entry (though unlikely if querySync returned it)
-        // Or if the Set is unexpectedly empty. Default to empty array if not found.
-        const urlsThatHaveEvent = relaysThatHaveEvent
-          ? Array.from(relaysThatHaveEvent).map((r) => r.url)
+        // Convert the set to a list of URLs, handling cases where the set might be missing
+        const urlsThatHaveEvent = relaysThatHaveEventSet
+          ? Array.from(relaysThatHaveEventSet).map((r) => r.url)
           : [];
 
-        // Target only the write relays that *don't* have the event according to seenOn
+        // Determine which write relays *don't* have this event according to seenOn
         const relaysToPublishTo = writeRelayUrls.filter(
           (url) => !urlsThatHaveEvent.includes(url),
         );
 
-        // If all write relays already have the event according to seenOn, skip publishing
+        // If all target relays already have the event, skip publishing
         if (relaysToPublishTo.length === 0) {
           console.log(
             `Event ${event.id.substring(0, 8)} already exists on all target write relays according to seenOn.`,
           );
-          totalSyncedCount++;
-          continue;
+          totalSyncedCount++; // Count as synced/verified
+          continue; // Move to the next event in the batch
         }
 
         console.log(
@@ -195,20 +230,25 @@ async function syncEvents(
         );
 
         try {
+          // Publish the event only to the relays that don't have it
           const publishPromises = syncPool.publish(relaysToPublishTo, event);
 
+          // Wait for all publish attempts to settle (succeed or fail)
           const results = await Promise.allSettled(publishPromises);
 
           const failedRelays: string[] = [];
+          // Check the results for each publish attempt
           results.forEach((result, index) => {
             if (result.status === 'rejected') {
+              // If a publish failed, record the relay URL and reason
               const failedUrl = relaysToPublishTo[index];
               failedRelays.push(failedUrl);
               console.error(
                 `Failed to publish event ${event.id.substring(0, 8)} to relay ${failedUrl}:`,
-                result.reason,
+                result.reason, // Log the specific reason (e.g., 'timed out', 'blocked: rate-limited')
               );
             } else {
+              // Log success for clarity
               const successUrl = relaysToPublishTo[index];
               console.log(
                 `Publish confirmed/sent for event ${event.id.substring(0, 8)} to relay ${successUrl}: ${result.value}`,
@@ -216,109 +256,139 @@ async function syncEvents(
             }
           });
 
+          // If any publishes failed, stop the entire sync process
           if (failedRelays.length > 0) {
-            const errorMsg = `Error: Failed to publish event ${event.id.substring(0, 8)} to ${failedRelays.length} relays: ${failedRelays.join(', ')}. Stopping sync.`;
+            // Extract specific reasons if possible, otherwise join URLs
+            const failureReasons = results
+              .filter((res) => res.status === 'rejected')
+              .map((res: PromiseRejectedResult) => String(res.reason)) // Convert reasons to strings
+              .join('; '); // Join reasons with semicolon
+
+            const errorMsg = `Error: Failed to publish event ${event.id.substring(0, 8)} to ${failedRelays.length} relays. Stopping sync.`;
             updateProgress({
               status: 'error',
               message: errorMsg,
               currentEventId: event.id,
-              errorDetails: `Failed relays: ${failedRelays.join(', ')}`,
+              syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp on error
+              errorDetails: `Failed relays: ${failedRelays.join(', ')}. Reasons: ${failureReasons}`, // Provide detailed error info
             });
             console.error(errorMsg);
             allSynced = false;
-            break;
+            break; // Exit the inner for loop
           } else {
-            totalSyncedCount++;
+            // If all publishes succeeded for this event
+            totalSyncedCount++; // Increment the synced count
           }
         } catch (publishError: any) {
+          // Catch unexpected errors during the publish phase
           const errorMsg = `Unexpected error publishing event ${event.id}: ${publishError.message || publishError}. Stopping sync.`;
           updateProgress({
             status: 'error',
             message: errorMsg,
             currentEventId: event.id,
-            errorDetails: `${publishError}`,
+            syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp on error
+            errorDetails: String(publishError), // Provide error details
           });
           console.error(errorMsg, publishError);
           allSynced = false;
-          break;
+          break; // Exit the inner for loop
         }
-        // 릴레이 부하 감소를 위한 짧은 지연 (선택 사항)
-        await new Promise((resolve) => setTimeout(resolve, 5_000));
-      } // End of for (const event of events)
 
+        // Optional delay between publishing individual events within a batch to reduce load
+        await new Promise((resolve) => setTimeout(resolve, 5_000)); // e.g., 5s delay
+      } // End of for (const event of events) loop
+
+      // If an error occurred within the inner loop, exit the outer while loop too
       if (!allSynced) {
         break;
       }
 
-      // 다음 배치를 위해 타임스탬프 업데이트
-      // 중요: until 필터는 해당 시간 *미만*을 의미하므로, 다음번에는 현재 배치의 가장 오래된 이벤트 시간으로 설정
+      // Update the timestamp for the next batch fetch
+      // Use the timestamp of the oldest event processed in this batch
       syncUntilTimestamp = batchOldestTimestamp;
 
+      // Update progress after completing a batch successfully
       updateProgress({
         status: 'batch_complete',
         message: `Batch synced. Continuing before ${new Date(syncUntilTimestamp * 1000).toLocaleString()} (Total synced: ${totalSyncedCount})`,
         syncedUntilTimestamp: syncUntilTimestamp,
       });
 
-      // 릴레이 부하 감소를 위한 짧은 지연 (선택 사항)
-      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      // Optional delay between batches to avoid overwhelming relays
+      await new Promise((resolve) => setTimeout(resolve, 10_000)); // e.g., 10s delay
 
-      // 만약 가져온 이벤트 수가 요청한 batchSize보다 적다면, 거의 끝에 도달했다는 의미
+      // If the number of events fetched was less than the batch size, we've likely reached the end
       if (events.length < batchSize) {
         updateProgress({
           status: 'complete',
           message: `Sync complete! Reached end of history. Total synced: ${totalSyncedCount}`,
+          syncedUntilTimestamp: syncUntilTimestamp, // Keep the final timestamp
         });
         console.log(
           'Sync complete for',
           pubkey,
           '- likely reached end of history.',
         );
-        break;
+        break; // Exit the loop, sync finished
       }
-    } // End of while(true)
+    } // End of while(true) loop
   } catch (error: any) {
+    // Catch any other unhandled errors in the sync process
     updateProgress({
       status: 'error',
-      message: `Unhandled sync error: ${error.message || error}`,
+      message: `Unhandled sync error.`,
+      syncedUntilTimestamp: syncUntilTimestamp, // Try to keep timestamp if available
+      errorDetails: error.message || String(error), // Provide error details
     });
     console.error('Unhandled sync error:', error);
     allSynced = false;
   } finally {
-    // SimplePool 자원 정리 (v2 API 확인 필요)
-    syncPool.close(writeRelayUrls); // 관련된 모든 릴레이 연결 종료 시도
-    // 또는 syncPool.destroy();
+    // Clean up the pool resources regardless of success or failure
+    syncPool.destroy(); // if available and appropriate
   }
 
+  // Return whether the sync completed without errors
   return allSynced;
 }
 
+// Main React App component
 function App() {
+  // State for user input (npub/nprofile)
   const [input, setInput] = useState('');
+  // State for the decoded hex public key
   const [decodedHex, setDecodedHex] = useState<string | null>(null);
+  // State for relays found in nprofile (if any)
   const [profileRelays, setProfileRelays] = useState<string[] | null>(null);
+  // State for the parsed NIP-65 relay list
   const [outboxRelays, setOutboxRelays] = useState<RelayInfo[] | null>(null);
+  // State for decoding errors
   const [decodeError, setDecodeError] = useState<string | null>(null);
+  // State to track if decoding is in progress
   const [isDecoding, setIsDecoding] = useState(false);
+  // State to track if syncing is in progress
   const [isSyncing, setIsSyncing] = useState(false);
+  // State for displaying sync progress and status
   const [syncProgress, setSyncProgress] = useState<SyncProgress>({
     status: 'idle',
     message: 'Enter npub or nprofile and click Decode.',
   });
 
+  // Handler for the Decode button click
   const handleDecode = useCallback(async () => {
     setIsDecoding(true);
     setDecodeError(null);
     setDecodedHex(null);
     setProfileRelays(null);
     setOutboxRelays(null);
-    setSyncProgress({ status: 'idle', message: 'Decoding...' });
+    setSyncProgress({ status: 'idle', message: 'Decoding...' }); // Reset progress
 
     try {
+      // Decode the input string
       const { type, data } = nip19.decode(input.trim());
       let pubkeyHex: string;
       let relaysFromProfile: string[] | null = null;
 
+      // Extract pubkey and profile relays based on type
       if (type === 'npub') {
         pubkeyHex = data as string;
       } else if (type === 'nprofile') {
@@ -326,12 +396,9 @@ function App() {
         relaysFromProfile =
           (data as { pubkey: string; relays?: string[] }).relays || null;
       } else {
-        setDecodeError(
-          'Unsupported NIP-19 format. (Only npub or nprofile supported)'
+        throw new Error(
+          'Unsupported NIP-19 format. (Only npub or nprofile supported)',
         );
-        setIsDecoding(false);
-        setSyncProgress({ status: 'idle', message: 'Decode failed.' });
-        return;
       }
 
       setDecodedHex(pubkeyHex);
@@ -341,6 +408,7 @@ function App() {
         message: 'Fetching NIP-65 relay list...',
       });
 
+      // Fetch the NIP-65 relay list
       const relayInfo = await fetchOutboxRelays(pubkeyHex, relaysFromProfile);
       if (relayInfo) {
         setOutboxRelays(relayInfo);
@@ -350,24 +418,30 @@ function App() {
           message: `Found ${relayInfo.length} relays in NIP-65 (${writeRelaysCount} write). Ready to sync.`,
         });
       } else {
+        // Handle case where NIP-65 is not found
         setSyncProgress({
           status: 'idle',
           message: 'Could not find NIP-65 relay list. Sync disabled.',
         });
-        setDecodeError('Failed to fetch NIP-65 relay list (kind:10002)...');
+        setDecodeError(
+          'Could not find or fetch NIP-65 relay list (kind:10002).',
+        );
       }
     } catch (e: any) {
+      // Handle decoding or fetch errors
       setDecodeError(
-        `Decoding failed: ${e.message || 'Invalid NIP-19 string?'}`
+        `Decoding failed: ${e.message || 'Invalid NIP-19 string?'}`,
       );
       console.error('Decode error:', e);
       setSyncProgress({ status: 'idle', message: 'Decode failed.' });
     } finally {
       setIsDecoding(false);
     }
-  }, [input]);
+  }, [input]); // Dependency: input state
 
+  // Handler for the Sync button click
   const handleSync = useCallback(async () => {
+    // Prevent sync if already running or necessary data is missing
     if (!decodedHex || !outboxRelays || isSyncing) return;
 
     const writeRelays = outboxRelays.filter(isWriteRelay);
@@ -379,29 +453,37 @@ function App() {
       return;
     }
     setIsSyncing(true);
-    setSyncProgress({ status: 'fetching_batch', message: 'Starting sync...' });
+    // Pass setSyncProgress as the callback to update UI
     const success = await syncEvents(decodedHex, outboxRelays, setSyncProgress);
     setIsSyncing(false);
+
+    // Update final status message if needed (syncEvents should set final status)
     if (success && syncProgress.status !== 'complete') {
       setSyncProgress((prev) => ({
         ...prev,
         status: 'complete',
-        message: prev.message || 'Sync finished!',
+        message: prev.message.startsWith('Sync complete!')
+          ? prev.message
+          : 'Sync finished successfully!', // Avoid overwriting specific complete message
       }));
     } else if (!success && syncProgress.status !== 'error') {
+      // Handle unexpected non-error failure
       setSyncProgress((prev) => ({
         ...prev,
         status: 'error',
         message: prev.message || 'Sync stopped or failed unexpectedly.',
+        errorDetails: prev.errorDetails || 'Unknown reason.',
       }));
     }
-  }, [decodedHex, outboxRelays, isSyncing, syncProgress.status]);
+  }, [decodedHex, outboxRelays, isSyncing, syncProgress.status]); // Dependencies for the callback
 
+  // Filter relays for display purposes
   const doubleRelay = outboxRelays?.filter(isDoubleRelay) || [];
-  const writeRelays = outboxRelays?.filter(isWriteRelay) || [];
+  const writeRelays = outboxRelays?.filter(isWriteRelay) || []; // Used for enabling sync button
   const writeOnlyRelays = outboxRelays?.filter(isWriteOnlyRelay) || [];
   const readOnlyRelays = outboxRelays?.filter(isReadOnlyRelay) || [];
 
+  // Render the UI
   return (
     <div
       style={{
@@ -416,6 +498,7 @@ function App() {
         Syncs your past notes (kind:1) across all 'write' relays listed in your
         NIP-65 (kind:10002).
       </p>
+      {/* Input and Decode Button */}
       <input
         type="text"
         placeholder="npub1... or nprofile1..."
@@ -437,12 +520,14 @@ function App() {
         {isDecoding ? 'Decoding...' : 'Decode'}
       </button>
 
+      {/* Display Decoding Error */}
       {decodeError && (
         <div style={{ marginTop: '1rem', color: 'red' }}>
           Error: {decodeError}
         </div>
       )}
 
+      {/* Display Decoded Pubkey */}
       {decodedHex && (
         <div style={{ marginTop: '1rem' }}>
           <strong>🔓 HEX pubkey:</strong>
@@ -458,6 +543,7 @@ function App() {
         </div>
       )}
 
+      {/* Display Relays from nprofile (if any) */}
       {profileRelays && profileRelays.length > 0 && (
         <div style={{ marginTop: '1rem' }}>
           <strong>🌐 Relays from nprofile:</strong>
@@ -479,12 +565,14 @@ function App() {
         </div>
       )}
 
+      {/* Display Parsed NIP-65 Relays */}
       {outboxRelays && (
         <div style={{ marginTop: '1rem' }}>
           <strong>📤 NIP-65 Relays:</strong>
+          {/* Display Read/Write Relays */}
           {doubleRelay.length > 0 && (
             <div style={{ marginTop: '0.5rem' }}>
-              <strong>📖✍️ Read/Write Relay ({doubleRelay.length}):</strong>
+              <strong>📖✍️ Read/Write ({doubleRelay.length}):</strong>
               <ul
                 style={{
                   background: '#f0f8f0',
@@ -495,7 +583,7 @@ function App() {
                 }}
               >
                 {doubleRelay.map((relay, idx) => (
-                  <li key={`r-${idx}`} style={{ wordBreak: 'break-all' }}>
+                  <li key={`rw-${idx}`} style={{ wordBreak: 'break-all' }}>
                     {relay.url}{' '}
                     <span style={{ color: '#666' }}>({relay.type})</span>
                   </li>
@@ -503,6 +591,7 @@ function App() {
               </ul>
             </div>
           )}
+          {/* Display Write-Only Relays */}
           {writeOnlyRelays.length > 0 && (
             <div style={{ marginTop: '0.5rem' }}>
               <strong>✍️ Write Only ({writeOnlyRelays.length}):</strong>
@@ -523,6 +612,7 @@ function App() {
               </ul>
             </div>
           )}
+          {/* Display Read-Only Relays */}
           {readOnlyRelays.length > 0 && (
             <div style={{ marginTop: '0.5rem' }}>
               <strong>📖 Read Only ({readOnlyRelays.length}):</strong>
@@ -544,6 +634,7 @@ function App() {
               </ul>
             </div>
           )}
+          {/* Sync Control Section (only if write relays exist) */}
           {writeRelays.length > 0 ? (
             <div
               style={{
@@ -553,44 +644,70 @@ function App() {
               }}
             >
               <h3>Sync Status</h3>
+              {/* Sync Button */}
               <button
                 onClick={handleSync}
                 disabled={
                   isSyncing ||
                   writeRelays.length === 0 ||
-                  syncProgress.status === 'fetching_relays' ||
-                  syncProgress.status === 'fetching_batch' ||
+                  syncProgress.status === 'fetching_relays' || // Disable while fetching NIP-65
+                  syncProgress.status === 'fetching_batch' || // Disable during sync phases
                   syncProgress.status === 'syncing_event'
                 }
                 style={{ padding: '0.5rem 1rem', marginBottom: '1rem' }}
               >
                 {isSyncing ? 'Syncing...' : 'Start Full Sync (kind:1)'}
               </button>
-              {/* ... Sync Progress Display ... */}
-              <div style={{ minHeight: '4em' /* Prevent layout shifts */ }}>
+              {/* Sync Progress Display Area */}
+              <div style={{ minHeight: '4em' }}>
                 <div>
                   <strong>Status:</strong> {syncProgress.message}
                 </div>
+                {/* Display timestamp when available */}
+                {syncProgress.syncedUntilTimestamp && (
+                  <div style={{ fontSize: '0.9em', color: '#555' }}>
+                    Processed events before:{' '}
+                    {new Date(
+                      syncProgress.syncedUntilTimestamp * 1000,
+                    ).toLocaleString()}
+                  </div>
+                )}
+                {/* Display current event ID during sync */}
                 {isSyncing && syncProgress.currentEventId && (
                   <div style={{ fontSize: '0.9em', color: '#555' }}>
                     Current Event:{' '}
                     {syncProgress.currentEventId.substring(0, 10)}...
                   </div>
                 )}
+                {/* Display error details if status is error */}
                 {syncProgress.status === 'error' &&
                   syncProgress.errorDetails && (
-                    <div style={{ fontSize: '0.9em', color: 'red' }}>
-                      Details: {syncProgress.errorDetails}
+                    <div
+                      style={{
+                        fontSize: '0.9em',
+                        color: 'red',
+                        marginTop: '0.5em',
+                      }}
+                    >
+                      <strong>Details:</strong> {syncProgress.errorDetails}
                     </div>
                   )}
+                {/* Display success message on completion */}
                 {syncProgress.status === 'complete' && (
-                  <div style={{ color: 'green', fontWeight: 'bold' }}>
-                    Synchronization finished successfully!
+                  <div
+                    style={{
+                      color: 'green',
+                      fontWeight: 'bold',
+                      marginTop: '0.5em',
+                    }}
+                  >
+                    Synchronization finished!
                   </div>
                 )}
               </div>
             </div>
           ) : (
+            // Warning if no write relays are found
             <div style={{ marginTop: '1rem', color: 'orange' }}>
               Warning: No 'write' relays found in NIP-65 list. Sync cannot
               proceed.
@@ -598,7 +715,7 @@ function App() {
           )}
         </div>
       )}
-      {/* ... (No NIP-65 found message) ... */}
+      {/* Message if NIP-65 could not be fetched */}
       {!outboxRelays && decodedHex && !isDecoding && !decodeError && (
         <div style={{ marginTop: '1rem', color: 'orange' }}>
           Could not find or fetch NIP-65 relay list (kind:10002). Sync is not
