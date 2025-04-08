@@ -1,4 +1,10 @@
-import { SimplePool, Event, Filter } from 'nostr-tools';
+import {
+  SimplePool,
+  Event,
+  Filter,
+  generateSecretKey,
+  finalizeEvent,
+} from 'nostr-tools';
 import { nip19 } from 'nostr-tools';
 import React, { useState, useCallback } from 'react';
 
@@ -99,6 +105,7 @@ async function syncEvents(
   pubkey: string,
   allRelaysInfo: RelayInfo[],
   updateProgress: (progress: SyncProgress) => void,
+  sk: Uint8Array,
 ): Promise<boolean> {
   // Identify target relays marked for writing
   const writeRelayUrls = allRelaysInfo.filter(isWriteRelay).map((r) => r.url);
@@ -149,6 +156,21 @@ async function syncEvents(
       };
 
       let eventsBeforeSliced: Event[] = [];
+
+      await new Promise(() => {
+        syncPool.subscribeEose(writeRelayUrls, filter, {
+          doauth: async (ev) => {
+            const signedEvent = finalizeEvent(ev, sk);
+            return signedEvent;
+          },
+          onevent(event: Event) {
+            eventsBeforeSliced.push(event);
+          },
+          // onclose(_: string[]) {
+          //   resolve(eventsBeforeSliced);
+          // },
+        });
+      });
       try {
         // Fetch events from all write relays using querySync
         console.log(`Querying relays ${writeRelayUrls.join(', ')}`);
@@ -377,6 +399,7 @@ function App() {
     status: 'idle',
     message: 'Enter npub or nprofile and click Decode.',
   });
+  const sk = generateSecretKey();
 
   // Handler for the Decode button click
   const handleDecode = useCallback(async () => {
@@ -459,7 +482,12 @@ function App() {
     }
     setIsSyncing(true);
     // Pass setSyncProgress as the callback to update UI
-    const success = await syncEvents(decodedHex, outboxRelays, setSyncProgress);
+    const success = await syncEvents(
+      decodedHex,
+      outboxRelays,
+      setSyncProgress,
+      sk,
+    );
     setIsSyncing(false);
 
     // Update final status message if needed (syncEvents should set final status)
@@ -480,7 +508,7 @@ function App() {
         errorDetails: prev.errorDetails || 'Unknown reason.',
       }));
     }
-  }, [decodedHex, outboxRelays, isSyncing, syncProgress.status]); // Dependencies for the callback
+  }, [decodedHex, outboxRelays, isSyncing, syncProgress.status, sk]); // Dependencies for the callback
 
   // Filter relays for display purposes
   const doubleRelay = outboxRelays?.filter(isDoubleRelay) || [];
