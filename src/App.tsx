@@ -48,6 +48,11 @@ const isWriteRelay = (relayInfo: RelayInfo): boolean => {
   return relayInfo.type.includes('Write');
 };
 
+// Helper function to check if a relay is marked for reading
+const isReadRelay = (relayInfo: RelayInfo): boolean => {
+  return relayInfo.type.includes('Read');
+};
+
 // Helper function to check if a relay is marked for both read and write
 const isDoubleRelay = (relayInfo: RelayInfo): boolean => {
   return relayInfo.type === '📖✍️ Read/Write';
@@ -121,6 +126,21 @@ async function fetchOutboxRelays(
   }
 }
 
+async function syncInboxRelaysOfEnent(
+  eventId: string,
+  inboxRelayUrls: string[],
+  syncPool: SimplePool,
+) {
+  console.log(
+    'Syncing inbox relays of event',
+    eventId,
+    'on relays:',
+    inboxRelayUrls,
+    'with syncPool:',
+    syncPool,
+  );
+}
+
 // Main function to synchronize past events (kind:1 notes)
 async function syncEvents(
   pubkey: string,
@@ -129,6 +149,7 @@ async function syncEvents(
 ): Promise<boolean> {
   // Identify target relays marked for writing
   const writeRelayUrls = allRelaysInfo.filter(isWriteRelay).map((r) => r.url);
+  const readRelayUrls = allRelaysInfo.filter(isReadRelay).map((r) => r.url);
 
   if (writeRelayUrls.length === 0) {
     // Update progress and return if no write relays are configured
@@ -365,6 +386,9 @@ async function syncEvents(
           allSynced = false;
           break; // Exit the inner for loop
         }
+
+        // Sync all inbox relays of the event
+        await syncInboxRelaysOfEnent(event.id, readRelayUrls, syncPool);
 
         // Optional delay between publishing individual events within a batch to reduce load
         await new Promise((resolve) => setTimeout(resolve, 5_000)); // e.g., 5s delay
