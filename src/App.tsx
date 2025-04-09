@@ -53,21 +53,6 @@ const isReadRelay = (relayInfo: RelayInfo): boolean => {
   return relayInfo.type.includes('Read');
 };
 
-// Helper function to check if a relay is marked for both read and write
-const isDoubleRelay = (relayInfo: RelayInfo): boolean => {
-  return relayInfo.type === '📖✍️ Read/Write';
-};
-
-// Helper function to check if a relay is marked write-only
-const isWriteOnlyRelay = (relayInfo: RelayInfo): boolean => {
-  return relayInfo.type === '✍️ Write';
-};
-
-// Helper function to check if a relay is marked read-only
-const isReadOnlyRelay = (relayInfo: RelayInfo): boolean => {
-  return relayInfo.type === '📖 Read';
-};
-
 // Define possible statuses for the sync process
 type SyncStatus =
   | 'idle'
@@ -587,10 +572,19 @@ function App() {
   }, [decodedHex, outboxRelays, isSyncing, syncProgress.status]); // Dependencies for the callback
 
   // Filter relays for display purposes
-  const doubleRelay = outboxRelays?.filter(isDoubleRelay) || [];
+  const doubleRelay =
+    outboxRelays?.filter((relay) => {
+      return isReadRelay(relay) && isWriteRelay(relay);
+    }) || [];
   const writeRelays = outboxRelays?.filter(isWriteRelay) || []; // Used for enabling sync button
-  const writeOnlyRelays = outboxRelays?.filter(isWriteOnlyRelay) || [];
-  const readOnlyRelays = outboxRelays?.filter(isReadOnlyRelay) || [];
+  const writeOnlyRelays =
+    outboxRelays?.filter((relay) => {
+      return isWriteRelay(relay) && !isReadRelay(relay);
+    }) || [];
+  const readOnlyRelays =
+    outboxRelays?.filter((relay) => {
+      return isReadRelay(relay) && !isWriteRelay(relay);
+    }) || [];
 
   // Render the UI
   return (
