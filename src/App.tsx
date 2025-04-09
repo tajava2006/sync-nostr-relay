@@ -2,8 +2,8 @@ import {
   SimplePool,
   Event,
   Filter,
-  generateSecretKey,
-  finalizeEvent,
+  EventTemplate,
+  VerifiedEvent,
 } from 'nostr-tools';
 import { nip19 } from 'nostr-tools';
 import React, { useState, useCallback } from 'react';
@@ -11,6 +11,27 @@ import React, { useState, useCallback } from 'react';
 interface RelayInfo {
   url: string;
   type: string;
+}
+
+// NIP-07 window.nostr 객체의 타입을 정의합니다.
+// 필요한 메서드만 포함하거나 NIP-07 스펙 전체를 포함할 수 있습니다.
+interface NostrProvider {
+  getPublicKey(): Promise<string>;
+  signEvent(event: EventTemplate): Promise<VerifiedEvent>; // nostr-tools의 Event는 보통 서명된 이벤트입니다.
+  getRelays?(): Promise<{ [url: string]: { read: boolean; write: boolean } }>; // Optional
+  nip04?: {
+    // Optional
+    encrypt(pubkey: string, plaintext: string): Promise<string>;
+    decrypt(pubkey: string, ciphertext: string): Promise<string>;
+  };
+}
+
+// 전역 Window 인터페이스에 nostr 속성을 추가합니다.
+// '?'를 붙여 선택적(optional)으로 만듭니다. (확장 프로그램이 없을 수도 있으므로)
+declare global {
+  interface Window {
+    nostr?: NostrProvider;
+  }
 }
 
 // Default relays to use if user relay is not found or doesn't provide hints
@@ -105,7 +126,6 @@ async function syncEvents(
   pubkey: string,
   allRelaysInfo: RelayInfo[],
   updateProgress: (progress: SyncProgress) => void,
-  sk: Uint8Array,
 ): Promise<boolean> {
   // Identify target relays marked for writing
   const writeRelayUrls = allRelaysInfo.filter(isWriteRelay).map((r) => r.url);
@@ -155,30 +175,55 @@ async function syncEvents(
         limit: batchSize,
       };
 
-      let eventsBeforeSliced: Event[] = [];
-
-      await new Promise(() => {
-        syncPool.subscribeEose(writeRelayUrls, filter, {
-          doauth: async (ev) => {
-            const signedEvent = finalizeEvent(ev, sk);
-            return signedEvent;
-          },
-          onevent(event: Event) {
-            eventsBeforeSliced.push(event);
-          },
-          // onclose(_: string[]) {
-          //   resolve(eventsBeforeSliced);
-          // },
-        });
-      });
+      const eventsBeforeSliced: Event[] = [];
       try {
-        // Fetch events from all write relays using querySync
-        console.log(`Querying relays ${writeRelayUrls.join(', ')}`);
-        // querySync waits for EOSE from all relays before returning events
-        eventsBeforeSliced = await syncPool.querySync(
-          writeRelayUrls,
-          filter /* Add options like { maxWait: ... } if needed */,
-        );
+        // console.log(`Querying relays ${writeRelayUrls.join(', ')}`);
+        await new Promise((resolve, reject) => {
+          // void로 변경, 에러 처리는 reject 사용
+          // NIP-07 사용 가능 여부 확인
+          if (!window.nostr || !window.nostr.signEvent) {
+            return reject(
+              new Error(
+                'NIP-07 extension not found or signEvent not supported. Cannot authenticate.',
+              ),
+            );
+          }
+
+          const sub = syncPool.subscribe(writeRelayUrls, filter, {
+            // --- 여기가 핵심: doauth 콜백 구현 ---
+            async doauth(challengeEventTemplate) {
+              console.log(
+                `Authentication required by relay, challenge:`,
+                challengeEventTemplate,
+              );
+              try {
+                // window.nostr.signEvent 호출 (사용자 승인 대기)
+                const signedAuthEvent = await window.nostr!.signEvent(
+                  challengeEventTemplate,
+                );
+                console.log('Signed AUTH event:', signedAuthEvent);
+                return signedAuthEvent; // 서명된 이벤트를 반환
+              } catch (error: any) {
+                // 사용자가 거부했거나 다른 에러 발생 시
+                console.error('Failed to sign AUTH event:', error);
+                // 에러를 다시 던져서 구독 시도 실패 처리
+                throw new Error(
+                  `NIP-07 signing failed: ${error.message || error}`,
+                );
+              }
+            },
+            onevent(event: Event) {
+              eventsBeforeSliced.push(event);
+            },
+            oneose: () => {
+              console.log(
+                `EOSE received. Total events fetched: ${eventsBeforeSliced.length}`,
+              );
+              sub.close(); // EOSE 후 구독 종료
+              resolve(eventsBeforeSliced); // 이벤트 수집 완료 알림
+            },
+          });
+        }); // End of new Promise
         console.log(
           `Fetched ${eventsBeforeSliced.length} events for batch before ${syncUntilTimestamp}`,
         );
@@ -399,7 +444,6 @@ function App() {
     status: 'idle',
     message: 'Enter npub or nprofile and click Decode.',
   });
-  const sk = generateSecretKey();
 
   // Handler for the Decode button click
   const handleDecode = useCallback(async () => {
@@ -472,6 +516,19 @@ function App() {
     // Prevent sync if already running or necessary data is missing
     if (!decodedHex || !outboxRelays || isSyncing) return;
 
+    // NIP-07 사용 가능 여부 사전 체크 (선택 사항이지만 권장)
+    if (!window.nostr) {
+      setSyncProgress({
+        status: 'error',
+        message:
+          'NIP-07 compatible extension (like Alby, nos2x) not found. Cannot proceed if authentication is required.',
+      });
+      alert(
+        'NIP-07 compatible extension (like Alby, nos2x) not found. Sync might fail if relays require authentication.',
+      );
+      // return; // 필요하면 여기서 중단
+    }
+
     const writeRelays = outboxRelays.filter(isWriteRelay);
     if (writeRelays.length === 0) {
       setSyncProgress({
@@ -482,12 +539,7 @@ function App() {
     }
     setIsSyncing(true);
     // Pass setSyncProgress as the callback to update UI
-    const success = await syncEvents(
-      decodedHex,
-      outboxRelays,
-      setSyncProgress,
-      sk,
-    );
+    const success = await syncEvents(decodedHex, outboxRelays, setSyncProgress);
     setIsSyncing(false);
 
     // Update final status message if needed (syncEvents should set final status)
@@ -508,7 +560,7 @@ function App() {
         errorDetails: prev.errorDetails || 'Unknown reason.',
       }));
     }
-  }, [decodedHex, outboxRelays, isSyncing, syncProgress.status, sk]); // Dependencies for the callback
+  }, [decodedHex, outboxRelays, isSyncing, syncProgress.status]); // Dependencies for the callback
 
   // Filter relays for display purposes
   const doubleRelay = outboxRelays?.filter(isDoubleRelay) || [];
