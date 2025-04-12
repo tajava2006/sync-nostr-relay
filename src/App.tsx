@@ -6,6 +6,7 @@ import {
   VerifiedEvent,
 } from 'nostr-tools';
 import { nip19 } from 'nostr-tools';
+import { normalizeURL } from 'nostr-tools/utils';
 import React, { useState, useCallback } from 'react';
 
 interface RelayInfo {
@@ -42,6 +43,8 @@ const defaultRelays = [
   'wss://purplepag.es/',
   'wss://relay.nostr.band/',
 ];
+
+const NOSTR_TOOLS_DEFAULT_CLOSE_REASON = 'closed by caller';
 
 // Helper function to check if a relay is marked for writing
 const isWriteRelay = (relayInfo: RelayInfo): boolean => {
@@ -92,7 +95,7 @@ async function fetchOutboxRelays(
       const relayInfo = event.tags
         .filter((tag: string[]) => tag[0] === 'r' && typeof tag[1] === 'string') // Ensure tag[1] is a string URL
         .map((tag: string[]) => ({
-          url: tag[1],
+          url: normalizeURL(tag[1]),
           type: tag[2] // Check marker if present
             ? tag[2] === 'read'
               ? '📖 Read'
@@ -183,50 +186,63 @@ async function syncEvents(
 
       const eventsBeforeSliced: Event[] = [];
       try {
+        const batchFetchTimeoutMs = 15_000; // Example: 15 seconds
         // console.log(`Querying relays ${writeRelayUrls.join(', ')}`);
         await new Promise((resolve, reject) => {
-          // void로 변경, 에러 처리는 reject 사용
-          // NIP-07 사용 가능 여부 확인
-          if (!window.nostr || !window.nostr.signEvent) {
-            return reject(
+          let isHandled = false; // Flag to prevent duplicate handling
+
+          const timeoutHandle = setTimeout(() => {
+            if (isHandled) return;
+            isHandled = true;
+            allSynced = false;
+            console.error(
+              `>>> Batch fetch timeout (${batchFetchTimeoutMs - 3_000}ms) exceeded.`,
+            );
+            try {
+              sub?.close();
+            } catch (e) {
+              console.warn(e);
+            }
+            reject(
               new Error(
-                'NIP-07 extension not found or signEvent not supported. Cannot authenticate.',
+                `Batch fetch timed out after ${batchFetchTimeoutMs - 3_000}ms`,
               ),
             );
-          }
+          }, batchFetchTimeoutMs - 3_000);
 
           const sub = syncPool.subscribe(writeRelayUrls, filter, {
-            // --- 여기가 핵심: doauth 콜백 구현 ---
-            async doauth(challengeEventTemplate) {
-              console.log(
-                `Authentication required by relay, challenge:`,
-                challengeEventTemplate,
-              );
-              try {
-                // window.nostr.signEvent 호출 (사용자 승인 대기)
-                const signedAuthEvent = await window.nostr!.signEvent(
-                  challengeEventTemplate,
-                );
-                console.log('Signed AUTH event:', signedAuthEvent);
-                return signedAuthEvent; // 서명된 이벤트를 반환
-              } catch (error: any) {
-                // 사용자가 거부했거나 다른 에러 발생 시
-                console.error('Failed to sign AUTH event:', error);
-                // 에러를 다시 던져서 구독 시도 실패 처리
-                throw new Error(
-                  `NIP-07 signing failed: ${error.message || error}`,
-                );
-              }
-            },
+            maxWait: batchFetchTimeoutMs,
             onevent(event: Event) {
               eventsBeforeSliced.push(event);
             },
             oneose: () => {
+              if (isHandled) return;
+              isHandled = true;
+              clearTimeout(timeoutHandle);
               console.log(
                 `EOSE received. Total events fetched: ${eventsBeforeSliced.length}`,
               );
               sub.close(); // EOSE 후 구독 종료
-              resolve(eventsBeforeSliced); // 이벤트 수집 완료 알림
+            },
+            onclose: (reasons) => {
+              // Note: This will be called AFTER oneose because of nostr-tools SimplePool behavior
+              isHandled = true; // Mark as handled to prevent potential race with oneose/timeout
+              clearTimeout(timeoutHandle);
+              const expectedReason = NOSTR_TOOLS_DEFAULT_CLOSE_REASON;
+              console.log('Closed handler, reasons: ', reasons);
+              const unexpectedReasons = reasons.filter(
+                (reason) => reason !== expectedReason,
+              );
+              if (unexpectedReasons.length > 0) {
+                console.error(
+                  '>>> Unexpected closure detected:',
+                  unexpectedReasons,
+                );
+                allSynced = false; // Set flag to break outer loop
+                reject(`Close before Eose: ${unexpectedReasons.join()}`);
+              } else {
+                resolve(eventsBeforeSliced);
+              }
             },
           });
         }); // End of new Promise
@@ -267,6 +283,9 @@ async function syncEvents(
 
       // Calculate the timestamp for the next iteration based on the *sliced* batch
       const batchOldestTimestamp = events[events.length - 1].created_at;
+
+      // console.log(events, 111);
+      // return false;
 
       // Process each event in the fetched batch
       for (const event of events) {
@@ -524,19 +543,6 @@ function App() {
   const handleSync = useCallback(async () => {
     // Prevent sync if already running or necessary data is missing
     if (!decodedHex || !outboxRelays || isSyncing) return;
-
-    // NIP-07 사용 가능 여부 사전 체크 (선택 사항이지만 권장)
-    if (!window.nostr) {
-      setSyncProgress({
-        status: 'error',
-        message:
-          'NIP-07 compatible extension (like Alby, nos2x) not found. Cannot proceed if authentication is required.',
-      });
-      alert(
-        'NIP-07 compatible extension (like Alby, nos2x) not found. Sync might fail if relays require authentication.',
-      );
-      // return; // 필요하면 여기서 중단
-    }
 
     const writeRelays = outboxRelays.filter(isWriteRelay);
     if (writeRelays.length === 0) {
