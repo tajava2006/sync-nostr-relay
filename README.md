@@ -1,5 +1,9 @@
 # Nostr NIP-65 Relay Synchronizer
 
+
+**➡️ Live Demo: [https://tajava2006.github.io/sync-nostr-relay/](https://tajava2006.github.io/sync-nostr-relay/)**
+
+
 A simple web tool to synchronize your past Nostr events (notes, long-form posts, mentions, etc.) across the specific relays defined in your current NIP-65 list (kind:10002 event).
 
 ## Goal
