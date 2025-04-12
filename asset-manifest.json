@@ -1,0 +1,10 @@
+{
+  "files": {
+    "main.js": "/sync-nostr-relay/static/js/main.025d3dcd.js",
+    "index.html": "/sync-nostr-relay/index.html",
+    "main.025d3dcd.js.map": "/sync-nostr-relay/static/js/main.025d3dcd.js.map"
+  },
+  "entrypoints": [
+    "static/js/main.025d3dcd.js"
+  ]
+}
