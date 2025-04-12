@@ -2,6 +2,7 @@
   "name": "sync-nostr-relay",
   "version": "0.1.0",
   "private": true,
+  "homepage": "https://tajava2006.github.io/sync-nostr-relay",
   "type": "module",
   "dependencies": {
     "nostr-tools": "^2.12.0",
@@ -12,7 +13,9 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "format": "prettier --write src/**/*.{js,jsx,ts,tsx,css,md,json,scss} --config ./.prettierrc"
+    "format": "prettier --write src/**/*.{js,jsx,ts,tsx,css,md,json,scss} --config ./.prettierrc",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build"
   },
   "browserslist": {
     "production": [
@@ -37,6 +40,7 @@
     "eslint-plugin-jest": "^28.11.0",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "gh-pages": "^6.3.0",
     "globals": "^15.9.0",
     "prettier": "^3.5.3",
     "react-scripts": "5.0.1",
