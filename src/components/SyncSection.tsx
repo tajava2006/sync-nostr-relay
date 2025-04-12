@@ -1,11 +1,10 @@
-import { Filter } from "nostr-tools";
-import { SyncProgress } from "./App";
+import { SyncProgress } from "./types";
 
 // --- Reusable Sync Section Component ---
 interface SyncSectionProps {
   title: string;
   targetRelayUrls: string[];
-  filterToSync: Filter | null; // Allow null if not ready
+  canStartSync: boolean; 
   pubkey: string | null;       // Pubkey needed for filter/logging
   syncProgress: SyncProgress;
   isSyncing: boolean;
@@ -15,7 +14,7 @@ interface SyncSectionProps {
 function SyncSection({
   title,
   targetRelayUrls,
-  filterToSync,
+  canStartSync,  // 추가
   pubkey,
   syncProgress,
   isSyncing,
@@ -23,11 +22,7 @@ function SyncSection({
 }: SyncSectionProps) {
 
   const handleButtonClick = () => {
-    if (pubkey && filterToSync) {
-      onStartSync();
-    } else {
-      alert("Cannot start sync: Pubkey or filter not ready.");
-    }
+    onStartSync();
   };
 
   return (
@@ -43,8 +38,6 @@ function SyncSection({
             padding: '0.5rem 1rem',
             listStyle: 'none',
             margin: '0.5rem 0',
-            // maxHeight: '80px', // 스크롤 관련 속성 제거
-            // overflowY: 'auto',  // 스크롤 관련 속성 제거
             fontSize: '0.9em',
             border: '1px solid #eee'
           }}>
@@ -61,7 +54,7 @@ function SyncSection({
         disabled={
           isSyncing ||
           targetRelayUrls.length === 0 ||
-          !filterToSync ||
+          !canStartSync ||
           !pubkey ||
           syncProgress.status === 'fetching_batch' ||
           syncProgress.status === 'syncing_event'
