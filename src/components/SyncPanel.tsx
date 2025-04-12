@@ -1,19 +1,14 @@
-
-
 import React, { useMemo } from 'react';
 import { RelayInfo, SyncProgress } from './types';
 import SyncSection from './SyncSection';
 import { isReadRelay, isWriteRelay } from './util';
 
-// SyncPanel 컴포넌트의 Props 타입
 interface SyncPanelProps {
   outboxRelays: RelayInfo[] | null;
   decodedHex: string | null;
-  // Write Sync 관련 Props
   writeSyncProgress: SyncProgress;
   isWriteSyncing: boolean;
   handleWriteSync: () => void;
-  // Read Sync 관련 Props
   readSyncProgress: SyncProgress;
   isReadSyncing: boolean;
   handleReadSync: () => void;
@@ -29,7 +24,6 @@ export function SyncPanel({
   isReadSyncing,
   handleReadSync,
 }: SyncPanelProps) {
-  // useMemo를 사용하여 outboxRelays 변경 시에만 리스트 재생성
   const writeRelayList = useMemo(
     () => outboxRelays?.filter(isWriteRelay) || [],
     [outboxRelays],
@@ -42,7 +36,6 @@ export function SyncPanel({
   const canStartWriteSync = !!decodedHex && writeRelayList.length > 0;
   const canStartReadSync = !!decodedHex && readRelayList.length > 0;
 
-  // outboxRelays나 decodedHex가 없으면 아무것도 렌더링하지 않음
   if (!outboxRelays || !decodedHex) {
     return null;
   }
@@ -59,7 +52,6 @@ export function SyncPanel({
           canStartSync={canStartWriteSync}
           pubkey={decodedHex}
           syncProgress={writeSyncProgress}
-          // 다른 동기화 작업 중에도 버튼 비활성화
           isSyncing={isWriteSyncing || isReadSyncing}
           onStartSync={handleWriteSync}
         />
@@ -71,7 +63,6 @@ export function SyncPanel({
           canStartSync={canStartReadSync}
           pubkey={decodedHex}
           syncProgress={readSyncProgress}
-          // 다른 동기화 작업 중에도 버튼 비활성화
           isSyncing={isWriteSyncing || isReadSyncing}
           onStartSync={handleReadSync}
         />

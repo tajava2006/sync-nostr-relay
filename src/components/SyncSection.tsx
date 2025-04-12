@@ -1,48 +1,61 @@
 import { SyncProgress } from "./types";
 
-// --- Reusable Sync Section Component ---
 interface SyncSectionProps {
   title: string;
   targetRelayUrls: string[];
-  canStartSync: boolean; 
-  pubkey: string | null;       // Pubkey needed for filter/logging
+  canStartSync: boolean;
+  pubkey: string | null;
   syncProgress: SyncProgress;
   isSyncing: boolean;
-  onStartSync: () => void;   // Callback to start the sync
+  onStartSync: () => void;
 }
 
 function SyncSection({
   title,
   targetRelayUrls,
-  canStartSync,  // 추가
+  canStartSync,
   pubkey,
   syncProgress,
   isSyncing,
   onStartSync,
 }: SyncSectionProps) {
-
   const handleButtonClick = () => {
     onStartSync();
   };
 
   return (
-    <div style={{ flex: 1, border: '1px solid #ccc', padding: '1rem', margin: '0.5rem', display: 'flex', flexDirection: 'column' }}>
-      <h3>{title} ({targetRelayUrls.length} Relays)</h3>
+    <div
+      style={{
+        flex: 1,
+        border: '1px solid #ccc',
+        padding: '1rem',
+        margin: '0.5rem',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <h3>
+        {title} ({targetRelayUrls.length} Relays)
+      </h3>
 
       {/* Display Target Relay List */}
       {targetRelayUrls.length > 0 && (
         <div style={{ marginBottom: '1rem' }}>
           <strong>Target Relays:</strong>
-          <ul style={{
-            background: '#f9f9f9',
-            padding: '0.5rem 1rem',
-            listStyle: 'none',
-            margin: '0.5rem 0',
-            fontSize: '0.9em',
-            border: '1px solid #eee'
-          }}>
+          <ul
+            style={{
+              background: '#f9f9f9',
+              padding: '0.5rem 1rem',
+              listStyle: 'none',
+              margin: '0.5rem 0',
+              fontSize: '0.9em',
+              border: '1px solid #eee',
+            }}
+          >
             {targetRelayUrls.map((url, idx) => (
-              <li key={idx} style={{ wordBreak: 'break-all' }}>{url}</li>
+              <li key={idx} style={{ wordBreak: 'break-all' }}>
+                {url}
+              </li>
             ))}
           </ul>
         </div>
@@ -59,35 +72,51 @@ function SyncSection({
           syncProgress.status === 'fetching_batch' ||
           syncProgress.status === 'syncing_event'
         }
-        style={{ padding: '0.5rem 1rem', marginBottom: '1rem', alignSelf: 'flex-start' }} // Button alignment
+        style={{
+          padding: '0.5rem 1rem',
+          marginBottom: '1rem',
+          alignSelf: 'flex-start',
+        }} // Button alignment
       >
         {isSyncing ? 'Syncing...' : `Start ${title}`}
       </button>
 
       {/* Progress Display Area */}
-      <div style={{ minHeight: '6em', marginTop: 'auto' }}> {/* Push progress down */}
+      <div style={{ minHeight: '6em', marginTop: 'auto' }}>
+        {' '}
+        {/* Push progress down */}
         <div>
           <strong>Status:</strong> {syncProgress.message}
         </div>
         {syncProgress.syncedUntilTimestamp && (
           <div style={{ fontSize: '0.9em', color: '#555' }}>
             Processed events before:{' '}
-            {new Date(syncProgress.syncedUntilTimestamp * 1000).toLocaleString()}
+            {new Date(
+              syncProgress.syncedUntilTimestamp * 1000,
+            ).toLocaleString()}
           </div>
         )}
         {isSyncing && syncProgress.currentEventId && (
           <div style={{ fontSize: '0.9em', color: '#555' }}>
-            Current Event:{' '}
-            {syncProgress.currentEventId.substring(0, 10)}...
+            Current Event: {syncProgress.currentEventId.substring(0, 10)}...
           </div>
         )}
         {syncProgress.status === 'error' && syncProgress.errorDetails && (
-          <div style={{ fontSize: '0.9em', color: 'red', marginTop: '0.5em', wordBreak: 'break-word' }}>
+          <div
+            style={{
+              fontSize: '0.9em',
+              color: 'red',
+              marginTop: '0.5em',
+              wordBreak: 'break-word',
+            }}
+          >
             <strong>Details:</strong> {syncProgress.errorDetails}
           </div>
         )}
         {syncProgress.status === 'complete' && (
-          <div style={{ color: 'green', fontWeight: 'bold', marginTop: '0.5em' }}>
+          <div
+            style={{ color: 'green', fontWeight: 'bold', marginTop: '0.5em' }}
+          >
             Synchronization finished!
           </div>
         )}

@@ -174,7 +174,7 @@ function App() {
 
     setIsReadSyncing(true);
     // Define filter for "inbox" events (events mentioning the user)
-    const filter: Filter = { '#p': [decodedHex], kinds: [1, 6, 7, 9735] }; // Example filter
+    const filter: Filter = { '#p': [decodedHex], kinds: [1, 6, 7, 9735] };
     const success = await syncEvents(
       targetReadRelays,
       filter,
@@ -237,7 +237,7 @@ function App() {
         profileRelays={profileRelays}
       />
 
-      {/* Sync Panel 렌더링 */}
+      {/* Sync Panel Component */}
       <SyncPanel
         outboxRelays={outboxRelays}
         decodedHex={decodedHex}

@@ -145,7 +145,7 @@ export async function syncEvents(
               console.log(
                 `EOSE received. Total events fetched: ${eventsBeforeSliced.length}`,
               );
-              sub.close(); // EOSE 후 구독 종료
+              sub.close();
             },
             onclose: (reasons) => {
               // Note: This will be called AFTER oneose because of nostr-tools SimplePool behavior
