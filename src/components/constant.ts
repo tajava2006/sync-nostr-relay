@@ -9,3 +9,7 @@ export const DEFAULT_RELAYS = [
 ];
 
 export const NOSTR_TOOLS_DEFAULT_CLOSE_REASON = 'closed by caller';
+
+
+export const MAX_WRITE_RELAYS = 5;
+export const MAX_READ_RELAYS = 5;

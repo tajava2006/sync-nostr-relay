@@ -8,6 +8,7 @@ interface SyncSectionProps {
   syncProgress: SyncProgress;
   isSyncing: boolean;
   onStartSync: () => void;
+  isDisabledByLimit: boolean;
 }
 
 function SyncSection({
@@ -18,6 +19,7 @@ function SyncSection({
   syncProgress,
   isSyncing,
   onStartSync,
+  isDisabledByLimit,
 }: SyncSectionProps) {
   const handleButtonClick = () => {
     onStartSync();
@@ -69,6 +71,7 @@ function SyncSection({
           targetRelayUrls.length === 0 ||
           !canStartSync ||
           !pubkey ||
+          isDisabledByLimit ||
           syncProgress.status === 'fetching_batch' ||
           syncProgress.status === 'syncing_event'
         }
@@ -78,7 +81,11 @@ function SyncSection({
           alignSelf: 'flex-start',
         }} // Button alignment
       >
-        {isSyncing ? 'Syncing...' : `Start ${title}`}
+        {isDisabledByLimit
+          ? 'Too Many Relays'
+          : isSyncing
+            ? 'Syncing...'
+            : `Start ${title}`}
       </button>
 
       {/* Progress Display Area */}
