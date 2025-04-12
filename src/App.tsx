@@ -129,7 +129,7 @@ function App() {
     }
 
     setIsWriteSyncing(true);
-    const filter: Filter = { kinds: [1], authors: [decodedHex] };
+    const filter: Filter = { kinds: [1, 6, 30023], authors: [decodedHex] };
     const success = await syncEvents(
       targetWriteRelays,
       filter,
