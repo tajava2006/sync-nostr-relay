@@ -114,9 +114,8 @@ async function fetchOutboxRelays(
   }
 }
 
-// Main function to synchronize past events (kind:1 notes)
+// Generalized sync function
 async function syncEvents(
-  pubkey: string,
   targetRealyUrls: string[],
   filter: Filter,
   updateProgress: (progress: SyncProgress) => void,
@@ -147,7 +146,7 @@ async function syncEvents(
     message: `Identified ${targetRealyUrls.length} relays. Starting sync...`,
     syncedUntilTimestamp: syncUntilTimestamp, // Set initial timestamp
   });
-  console.log('Starting sync for', pubkey, 'on relays:', targetRealyUrls);
+  console.log('Starting sync on relays:', targetRealyUrls);
 
   try {
     // Main loop for paginated fetching and syncing
@@ -247,7 +246,7 @@ async function syncEvents(
           message: `Sync complete! No more older events found. Total synced: ${totalSyncedCount}`,
           syncedUntilTimestamp: syncUntilTimestamp, // Keep the final timestamp
         });
-        console.log('Sync complete for', pubkey);
+        console.log('Sync complete');
         break; // Exit the loop, sync finished
       }
 
@@ -399,11 +398,7 @@ async function syncEvents(
           message: `Sync complete! Reached end of history. Total synced: ${totalSyncedCount}`,
           syncedUntilTimestamp: syncUntilTimestamp, // Keep the final timestamp
         });
-        console.log(
-          'Sync complete for',
-          pubkey,
-          '- likely reached end of history.',
-        );
+        console.log('Sync complete - likely reached end of history.');
         break; // Exit the loop, sync finished
       }
     } // End of while(true) loop
@@ -535,12 +530,7 @@ function App() {
     };
     // Pass setSyncProgress as the callback to update UI
     const writeRelayUrls = writeRelays.map((r) => r.url);
-    const success = await syncEvents(
-      decodedHex,
-      writeRelayUrls,
-      filter,
-      setSyncProgress,
-    );
+    const success = await syncEvents(writeRelayUrls, filter, setSyncProgress);
     setIsSyncing(false);
 
     // Update final status message if needed (syncEvents should set final status)
