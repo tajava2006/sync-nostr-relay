@@ -114,36 +114,18 @@ async function fetchOutboxRelays(
   }
 }
 
-async function syncInboxRelaysOfEnent(
-  eventId: string,
-  inboxRelayUrls: string[],
-  syncPool: SimplePool,
-) {
-  console.log(
-    'Syncing inbox relays of event',
-    eventId,
-    'on relays:',
-    inboxRelayUrls,
-    'with syncPool:',
-    syncPool,
-  );
-}
-
 // Main function to synchronize past events (kind:1 notes)
 async function syncEvents(
   pubkey: string,
-  allRelaysInfo: RelayInfo[],
+  targetRealyUrls: string[],
+  filter: Filter,
   updateProgress: (progress: SyncProgress) => void,
 ): Promise<boolean> {
-  // Identify target relays marked for writing
-  const writeRelayUrls = allRelaysInfo.filter(isWriteRelay).map((r) => r.url);
-  const readRelayUrls = allRelaysInfo.filter(isReadRelay).map((r) => r.url);
-
-  if (writeRelayUrls.length === 0) {
-    // Update progress and return if no write relays are configured
+  if (targetRealyUrls.length === 0) {
+    // Update progress and return if no relays are configured
     updateProgress({
       status: 'error',
-      message: 'Error: No write relays found in NIP-65 list.',
+      message: 'Error: No relays found in NIP-65 list.',
       // No timestamp to keep here as sync didn't start
     });
     return false;
@@ -156,15 +138,16 @@ async function syncEvents(
   // Initialize pagination timestamp and counters
   let syncUntilTimestamp = Math.floor(Date.now() / 1000);
   const batchSize = 20; // Number of events to fetch per batch
+  filter.limit = batchSize;
   let allSynced = true; // Flag to track if the process completed without errors
   let totalSyncedCount = 0; // Counter for successfully synced/verified events
 
   updateProgress({
     status: 'fetching_batch', // Initial status before loop
-    message: `Identified ${writeRelayUrls.length} write relays. Starting sync...`,
+    message: `Identified ${targetRealyUrls.length} relays. Starting sync...`,
     syncedUntilTimestamp: syncUntilTimestamp, // Set initial timestamp
   });
-  console.log('Starting sync for', pubkey, 'on write relays:', writeRelayUrls);
+  console.log('Starting sync for', pubkey, 'on relays:', targetRealyUrls);
 
   try {
     // Main loop for paginated fetching and syncing
@@ -176,18 +159,13 @@ async function syncEvents(
         syncedUntilTimestamp: syncUntilTimestamp, // Pass current timestamp
       });
 
-      // Define the filter for fetching the next batch of events
-      const filter: Filter = {
-        kinds: [1], // Only sync notes
-        authors: [pubkey],
-        until: syncUntilTimestamp, // Fetch events older than this timestamp
-        limit: batchSize,
-      };
+      // Update until of filter for fetching the next batch of events
+      filter.until = syncUntilTimestamp;
 
       const eventsBeforeSliced: Event[] = [];
       try {
         const batchFetchTimeoutMs = 15_000; // Example: 15 seconds
-        // console.log(`Querying relays ${writeRelayUrls.join(', ')}`);
+        // console.log(`Querying relays ${targetRealyUrls.join(', ')}`);
         await new Promise((resolve, reject) => {
           let isHandled = false; // Flag to prevent duplicate handling
 
@@ -210,7 +188,7 @@ async function syncEvents(
             );
           }, batchFetchTimeoutMs - 3_000);
 
-          const sub = syncPool.subscribe(writeRelayUrls, filter, {
+          const sub = syncPool.subscribe(targetRealyUrls, filter, {
             maxWait: batchFetchTimeoutMs,
             onevent(event: Event) {
               eventsBeforeSliced.push(event);
@@ -297,7 +275,7 @@ async function syncEvents(
           syncedUntilTimestamp: syncUntilTimestamp, // Keep timestamp during sync
         });
         console.log(
-          `Attempting to sync event ${event.id} to ${writeRelayUrls.length} target relays.`,
+          `Attempting to sync event ${event.id} to ${targetRealyUrls.length} target relays.`,
         );
 
         // Get the set of relays known to have seen this event
@@ -308,15 +286,15 @@ async function syncEvents(
           ? Array.from(relaysThatHaveEventSet).map((r) => r.url)
           : [];
 
-        // Determine which write relays *don't* have this event according to seenOn
-        const relaysToPublishTo = writeRelayUrls.filter(
+        // Determine which relays *don't* have this event according to seenOn
+        const relaysToPublishTo = targetRealyUrls.filter(
           (url) => !urlsThatHaveEvent.includes(url),
         );
 
         // If all target relays already have the event, skip publishing
         if (relaysToPublishTo.length === 0) {
           console.log(
-            `Event ${event.id.substring(0, 8)} already exists on all target write relays according to seenOn.`,
+            `Event ${event.id.substring(0, 8)} already exists on all target relays according to seenOn.`,
           );
           totalSyncedCount++; // Count as synced/verified
           continue; // Move to the next event in the batch
@@ -390,9 +368,6 @@ async function syncEvents(
           allSynced = false;
           break; // Exit the inner for loop
         }
-
-        // Sync all inbox relays of the event
-        await syncInboxRelaysOfEnent(event.id, readRelayUrls, syncPool);
 
         // Optional delay between publishing individual events within a batch to reduce load
         await new Promise((resolve) => setTimeout(resolve, 5_000)); // e.g., 5s delay
@@ -553,8 +528,19 @@ function App() {
       return;
     }
     setIsSyncing(true);
+    // Define the filter for write relay
+    const filter: Filter = {
+      kinds: [1], // Only sync notes
+      authors: [decodedHex],
+    };
     // Pass setSyncProgress as the callback to update UI
-    const success = await syncEvents(decodedHex, outboxRelays, setSyncProgress);
+    const writeRelayUrls = writeRelays.map((r) => r.url);
+    const success = await syncEvents(
+      decodedHex,
+      writeRelayUrls,
+      filter,
+      setSyncProgress,
+    );
     setIsSyncing(false);
 
     // Update final status message if needed (syncEvents should set final status)
