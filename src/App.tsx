@@ -8,6 +8,7 @@ import {
 import { nip19 } from 'nostr-tools';
 import { normalizeURL } from 'nostr-tools/utils';
 import React, { useState, useCallback } from 'react';
+import SyncSection from './SyncSection';
 
 interface RelayInfo {
   url: string;
@@ -67,7 +68,7 @@ type SyncStatus =
   | 'complete';
 
 // Interface for the sync progress state object
-interface SyncProgress {
+export interface SyncProgress {
   status: SyncStatus;
   message: string;
   syncedUntilTimestamp?: number; // Timestamp until which events have been processed
@@ -137,16 +138,22 @@ async function syncEvents(
   // Initialize pagination timestamp and counters
   let syncUntilTimestamp = Math.floor(Date.now() / 1000);
   const batchSize = 20; // Number of events to fetch per batch
+  // Apply initial batchSize limit to the passed filter
   filter.limit = batchSize;
   let allSynced = true; // Flag to track if the process completed without errors
   let totalSyncedCount = 0; // Counter for successfully synced/verified events
 
   updateProgress({
     status: 'fetching_batch', // Initial status before loop
-    message: `Identified ${targetRealyUrls.length} relays. Starting sync...`,
+    message: `Identified ${targetRealyUrls.length} target relays. Starting sync...`,
     syncedUntilTimestamp: syncUntilTimestamp, // Set initial timestamp
   });
-  console.log('Starting sync on relays:', targetRealyUrls);
+  console.log(
+    'Starting sync for filter:',
+    filter,
+    'on relays:',
+    targetRealyUrls,
+  );
 
   try {
     // Main loop for paginated fetching and syncing
@@ -158,7 +165,7 @@ async function syncEvents(
         syncedUntilTimestamp: syncUntilTimestamp, // Pass current timestamp
       });
 
-      // Update until of filter for fetching the next batch of events
+      // Update filter for pagination
       filter.until = syncUntilTimestamp;
 
       const eventsBeforeSliced: Event[] = [];
@@ -216,7 +223,11 @@ async function syncEvents(
                   unexpectedReasons,
                 );
                 allSynced = false; // Set flag to break outer loop
-                reject(`Close before Eose: ${unexpectedReasons.join()}`);
+                reject(
+                  new Error(
+                    `Unexpected closure: ${unexpectedReasons.join(', ')}`,
+                  ),
+                ); // Reject on unexpected close
               } else {
                 resolve(eventsBeforeSliced);
               }
@@ -435,12 +446,19 @@ function App() {
   const [decodeError, setDecodeError] = useState<string | null>(null);
   // State to track if decoding is in progress
   const [isDecoding, setIsDecoding] = useState(false);
-  // State to track if syncing is in progress
-  const [isSyncing, setIsSyncing] = useState(false);
-  // State for displaying sync progress and status
-  const [syncProgress, setSyncProgress] = useState<SyncProgress>({
+
+  // Separate state for Write Sync
+  const [isWriteSyncing, setIsWriteSyncing] = useState(false);
+  const [writeSyncProgress, setWriteSyncProgress] = useState<SyncProgress>({
     status: 'idle',
-    message: 'Enter npub or nprofile and click Decode.',
+    message: 'Ready.',
+  });
+
+  // Separate state for Read Sync
+  const [isReadSyncing, setIsReadSyncing] = useState(false);
+  const [readSyncProgress, setReadSyncProgress] = useState<SyncProgress>({
+    status: 'idle',
+    message: 'Ready.',
   });
 
   // Handler for the Decode button click
@@ -450,7 +468,9 @@ function App() {
     setDecodedHex(null);
     setProfileRelays(null);
     setOutboxRelays(null);
-    setSyncProgress({ status: 'idle', message: 'Decoding...' }); // Reset progress
+    // Reset both sync progresses on new decode
+    setWriteSyncProgress({ status: 'idle', message: 'Ready.' });
+    setReadSyncProgress({ status: 'idle', message: 'Ready.' });
 
     try {
       // Decode the input string
@@ -473,100 +493,140 @@ function App() {
 
       setDecodedHex(pubkeyHex);
       setProfileRelays(relaysFromProfile);
-      setSyncProgress({
+      // Indicate fetching NIP-65
+      setWriteSyncProgress((prev) => ({
+        ...prev,
         status: 'fetching_relays',
-        message: 'Fetching NIP-65 relay list...',
-      });
+        message: 'Fetching NIP-65...',
+      }));
+      setReadSyncProgress((prev) => ({
+        ...prev,
+        status: 'fetching_relays',
+        message: 'Fetching NIP-65...',
+      }));
 
       // Fetch the NIP-65 relay list
       const relayInfo = await fetchOutboxRelays(pubkeyHex, relaysFromProfile);
       if (relayInfo) {
         setOutboxRelays(relayInfo);
-        const writeRelaysCount = relayInfo.filter(isWriteRelay).length;
-        setSyncProgress({
-          status: 'idle',
-          message: `Found ${relayInfo.length} relays in NIP-65 (${writeRelaysCount} write). Ready to sync.`,
-        });
+        const writeCount = relayInfo.filter(isWriteRelay).length;
+        const readCount = relayInfo.filter(isReadRelay).length;
+        const message = `Found ${relayInfo.length} NIP-65 relays (${writeCount} write, ${readCount} read). Ready.`;
+        setWriteSyncProgress({ status: 'idle', message });
+        setReadSyncProgress({ status: 'idle', message });
       } else {
-        // Handle case where NIP-65 is not found
-        setSyncProgress({
-          status: 'idle',
-          message: 'Could not find NIP-65 relay list. Sync disabled.',
-        });
+        const message = 'Could not find NIP-65 list. Sync disabled.';
+        setWriteSyncProgress({ status: 'idle', message });
+        setReadSyncProgress({ status: 'idle', message });
         setDecodeError(
           'Could not find or fetch NIP-65 relay list (kind:10002).',
         );
       }
     } catch (e: any) {
-      // Handle decoding or fetch errors
       setDecodeError(
         `Decoding failed: ${e.message || 'Invalid NIP-19 string?'}`,
       );
-      console.error('Decode error:', e);
-      setSyncProgress({ status: 'idle', message: 'Decode failed.' });
+      setWriteSyncProgress({ status: 'idle', message: 'Decode failed.' });
+      setReadSyncProgress({ status: 'idle', message: 'Decode failed.' });
     } finally {
       setIsDecoding(false);
     }
   }, [input]); // Dependency: input state
 
   // Handler for the Sync button click
-  const handleSync = useCallback(async () => {
-    // Prevent sync if already running or necessary data is missing
-    if (!decodedHex || !outboxRelays || isSyncing) return;
+  const handleWriteSync = useCallback(async () => {
+    if (!decodedHex || !outboxRelays || isWriteSyncing || isReadSyncing) return; // Prevent concurrent syncs
 
-    const writeRelays = outboxRelays.filter(isWriteRelay);
-    if (writeRelays.length === 0) {
-      setSyncProgress({
+    const targetWriteRelays = outboxRelays
+      .filter(isWriteRelay)
+      .map((r) => r.url);
+    if (targetWriteRelays.length === 0) {
+      setWriteSyncProgress({
         status: 'error',
-        message: 'No write relays found. Cannot sync.',
+        message: 'No write relays to sync.',
       });
       return;
     }
-    setIsSyncing(true);
-    // Define the filter for write relay
-    const filter: Filter = {
-      kinds: [1], // Only sync notes
-      authors: [decodedHex],
-    };
-    // Pass setSyncProgress as the callback to update UI
-    const writeRelayUrls = writeRelays.map((r) => r.url);
-    const success = await syncEvents(writeRelayUrls, filter, setSyncProgress);
-    setIsSyncing(false);
 
-    // Update final status message if needed (syncEvents should set final status)
-    if (success && syncProgress.status !== 'complete') {
-      setSyncProgress((prev) => ({
+    setIsWriteSyncing(true);
+    const filter: Filter = { kinds: [1], authors: [decodedHex] };
+    const success = await syncEvents(
+      targetWriteRelays,
+      filter,
+      setWriteSyncProgress,
+    );
+    setIsWriteSyncing(false);
+
+    if (success && writeSyncProgress.status !== 'complete') {
+      setWriteSyncProgress((prev) => ({
         ...prev,
         status: 'complete',
-        message: prev.message.startsWith('Sync complete!')
-          ? prev.message
-          : 'Sync finished successfully!', // Avoid overwriting specific complete message
+        message: 'Write sync finished!',
       }));
-    } else if (!success && syncProgress.status !== 'error') {
-      // Handle unexpected non-error failure
-      setSyncProgress((prev) => ({
+    } else if (!success && writeSyncProgress.status !== 'error') {
+      setWriteSyncProgress((prev) => ({
         ...prev,
         status: 'error',
-        message: prev.message || 'Sync stopped or failed unexpectedly.',
+        message: 'Write sync stopped.',
         errorDetails: prev.errorDetails || 'Unknown reason.',
       }));
     }
-  }, [decodedHex, outboxRelays, isSyncing, syncProgress.status]); // Dependencies for the callback
+  }, [
+    decodedHex,
+    outboxRelays,
+    isWriteSyncing,
+    isReadSyncing,
+    writeSyncProgress.status,
+  ]);
 
-  // Filter relays for display purposes
-  const doubleRelay =
-    outboxRelays?.filter((relay) => {
-      return isReadRelay(relay) && isWriteRelay(relay);
-    }) || [];
-  const writeRelays = outboxRelays?.filter(isWriteRelay) || []; // Used for enabling sync button
-  const writeOnlyRelays =
-    outboxRelays?.filter((relay) => {
-      return isWriteRelay(relay) && !isReadRelay(relay);
-    }) || [];
-  const readOnlyRelays =
-    outboxRelays?.filter((relay) => {
-      return isReadRelay(relay) && !isWriteRelay(relay);
-    }) || [];
+  // Handler for starting Read Relay Sync
+  const handleReadSync = useCallback(async () => {
+    if (!decodedHex || !outboxRelays || isWriteSyncing || isReadSyncing) return; // Prevent concurrent syncs
+
+    const targetReadRelays = outboxRelays.filter(isReadRelay).map((r) => r.url);
+    if (targetReadRelays.length === 0) {
+      setReadSyncProgress({
+        status: 'error',
+        message: 'No read relays to sync.',
+      });
+      return;
+    }
+
+    setIsReadSyncing(true);
+    // Define filter for "inbox" events (events mentioning the user)
+    const filter: Filter = { '#p': [decodedHex], kinds: [1, 6, 7, 9735] }; // Example filter
+    const success = await syncEvents(
+      targetReadRelays,
+      filter,
+      setReadSyncProgress,
+    );
+    setIsReadSyncing(false);
+
+    if (success && readSyncProgress.status !== 'complete') {
+      setReadSyncProgress((prev) => ({
+        ...prev,
+        status: 'complete',
+        message: 'Read sync finished!',
+      }));
+    } else if (!success && readSyncProgress.status !== 'error') {
+      setReadSyncProgress((prev) => ({
+        ...prev,
+        status: 'error',
+        message: 'Read sync stopped.',
+        errorDetails: prev.errorDetails || 'Unknown reason.',
+      }));
+    }
+  }, [
+    decodedHex,
+    outboxRelays,
+    isWriteSyncing,
+    isReadSyncing,
+    readSyncProgress.status,
+  ]);
+
+  // Filter relays for display
+  const writeRelayList = outboxRelays?.filter(isWriteRelay) || [];
+  const readRelayList = outboxRelays?.filter(isReadRelay) || [];
 
   // Render the UI
   return (
@@ -580,41 +640,42 @@ function App() {
     >
       <h1>Nostr Event Synchronizer</h1>
       <p>
-        Syncs your past notes (kind:1) across all 'write' relays listed in your
-        NIP-65 (kind:10002).
+        Syncs past events to your designated write and read relays based on
+        NIP-65.
       </p>
-      {/* Input and Decode Button */}
-      <input
-        type="text"
-        placeholder="npub1... or nprofile1..."
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        disabled={isDecoding || isSyncing}
-        style={{
-          width: 'calc(100% - 110px)',
-          padding: '0.5rem',
-          fontSize: '1rem',
-          marginRight: '10px',
-        }}
-      />
-      <button
-        onClick={handleDecode}
-        disabled={isDecoding || isSyncing}
-        style={{ padding: '0.5rem 1rem' }}
-      >
-        {isDecoding ? 'Decoding...' : 'Decode'}
-      </button>
 
-      {/* Display Decoding Error */}
-      {decodeError && (
-        <div style={{ marginTop: '1rem', color: 'red' }}>
-          Error: {decodeError}
-        </div>
-      )}
+      {/* Input Section */}
+      <div style={{ marginBottom: '1rem' }}>
+        <input
+          type="text"
+          placeholder="npub1... or nprofile1..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          disabled={isDecoding || isWriteSyncing || isReadSyncing}
+          style={{
+            width: 'calc(100% - 110px)',
+            padding: '0.5rem',
+            fontSize: '1rem',
+            marginRight: '10px',
+          }}
+        />
+        <button
+          onClick={handleDecode}
+          disabled={isDecoding || isWriteSyncing || isReadSyncing}
+          style={{ padding: '0.5rem 1rem' }}
+        >
+          {isDecoding ? 'Decoding...' : 'Decode'}
+        </button>
+        {decodeError && (
+          <div style={{ marginTop: '0.5rem', color: 'red' }}>
+            Error: {decodeError}
+          </div>
+        )}
+      </div>
 
-      {/* Display Decoded Pubkey */}
+      {/* Decoded Info Section */}
       {decodedHex && (
-        <div style={{ marginTop: '1rem' }}>
+        <div style={{ marginBottom: '1rem' }}>
           <strong>🔓 HEX pubkey:</strong>
           <pre
             style={{
@@ -625,187 +686,76 @@ function App() {
           >
             {decodedHex}
           </pre>
+          {profileRelays && profileRelays.length > 0 && (
+            <div>
+              <strong>ℹ️ Relays from nprofile:</strong>
+              <ul
+                style={{
+                  background: '#f8f8f8',
+                  padding: '0.5rem 1rem',
+                  listStyle: 'none',
+                  margin: '0.5rem 0',
+                  maxHeight: '60px',
+                  overflowY: 'auto',
+                }}
+              >
+                {profileRelays.map((relay, idx) => (
+                  <li key={idx} style={{ wordBreak: 'break-all' }}>
+                    {relay}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* NIP-65 and Sync Sections */}
+      {outboxRelays && decodedHex && (
+        <div>
+          <strong>📤 NIP-65 Relays Found:</strong>
+          {/* Maybe display the full list briefly here if desired */}
+
+          {/* Two Column Layout for Sync Sections */}
+          <div style={{ display: 'flex', marginTop: '1rem', gap: '1rem' }}>
+            {/* Write Sync Section */}
+            <SyncSection
+              title="Write Relay Sync"
+              targetRelayUrls={writeRelayList.map((r) => r.url)}
+              filterToSync={
+                writeRelayList.length > 0
+                  ? { kinds: [1], authors: [decodedHex] }
+                  : null
+              }
+              pubkey={decodedHex}
+              syncProgress={writeSyncProgress}
+              isSyncing={isWriteSyncing || isReadSyncing} // Disable button if *either* is syncing
+              onStartSync={handleWriteSync}
+            />
+
+            {/* Read Sync Section */}
+            <SyncSection
+              title="Read Relay Sync"
+              targetRelayUrls={readRelayList.map((r) => r.url)}
+              filterToSync={
+                readRelayList.length > 0
+                  ? { '#p': [decodedHex], kinds: [1, 6, 7, 9735] }
+                  : null
+              } // Example filter
+              pubkey={decodedHex}
+              syncProgress={readSyncProgress}
+              isSyncing={isWriteSyncing || isReadSyncing} // Disable button if *either* is syncing
+              onStartSync={handleReadSync}
+            />
+          </div>
         </div>
       )}
 
-      {/* Display Relays from nprofile (if any) */}
-      {profileRelays && profileRelays.length > 0 && (
-        <div style={{ marginTop: '1rem' }}>
-          <strong>🌐 Relays from nprofile:</strong>
-          <ul
-            style={{
-              background: '#f8f8f8',
-              padding: '1rem',
-              listStyle: 'none',
-              maxHeight: '100px',
-              overflowY: 'auto',
-            }}
-          >
-            {profileRelays.map((relay, idx) => (
-              <li key={idx} style={{ wordBreak: 'break-all' }}>
-                {relay}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Display Parsed NIP-65 Relays */}
-      {outboxRelays && (
-        <div style={{ marginTop: '1rem' }}>
-          <strong>📤 NIP-65 Relays:</strong>
-          {/* Display Read/Write Relays */}
-          {doubleRelay.length > 0 && (
-            <div style={{ marginTop: '0.5rem' }}>
-              <strong>📖✍️ Read/Write ({doubleRelay.length}):</strong>
-              <ul
-                style={{
-                  background: '#f0f8f0',
-                  padding: '1rem',
-                  listStyle: 'none',
-                  maxHeight: '100px',
-                  overflowY: 'auto',
-                }}
-              >
-                {doubleRelay.map((relay, idx) => (
-                  <li key={`rw-${idx}`} style={{ wordBreak: 'break-all' }}>
-                    {relay.url}{' '}
-                    <span style={{ color: '#666' }}>({relay.type})</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {/* Display Write-Only Relays */}
-          {writeOnlyRelays.length > 0 && (
-            <div style={{ marginTop: '0.5rem' }}>
-              <strong>✍️ Write Only ({writeOnlyRelays.length}):</strong>
-              <ul
-                style={{
-                  background: '#e0f0ff',
-                  padding: '1rem',
-                  listStyle: 'none',
-                  maxHeight: '150px',
-                  overflowY: 'auto',
-                }}
-              >
-                {writeOnlyRelays.map((relay, idx) => (
-                  <li key={`w-${idx}`} style={{ wordBreak: 'break-all' }}>
-                    {relay.url}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {/* Display Read-Only Relays */}
-          {readOnlyRelays.length > 0 && (
-            <div style={{ marginTop: '0.5rem' }}>
-              <strong>📖 Read Only ({readOnlyRelays.length}):</strong>
-              <ul
-                style={{
-                  background: '#f0f8f0',
-                  padding: '1rem',
-                  listStyle: 'none',
-                  maxHeight: '100px',
-                  overflowY: 'auto',
-                }}
-              >
-                {readOnlyRelays.map((relay, idx) => (
-                  <li key={`r-${idx}`} style={{ wordBreak: 'break-all' }}>
-                    {relay.url}{' '}
-                    <span style={{ color: '#666' }}>({relay.type})</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {/* Sync Control Section (only if write relays exist) */}
-          {writeRelays.length > 0 ? (
-            <div
-              style={{
-                marginTop: '1.5rem',
-                border: '1px solid #ccc',
-                padding: '1rem',
-              }}
-            >
-              <h3>Sync Status</h3>
-              {/* Sync Button */}
-              <button
-                onClick={handleSync}
-                disabled={
-                  isSyncing ||
-                  writeRelays.length === 0 ||
-                  syncProgress.status === 'fetching_relays' || // Disable while fetching NIP-65
-                  syncProgress.status === 'fetching_batch' || // Disable during sync phases
-                  syncProgress.status === 'syncing_event'
-                }
-                style={{ padding: '0.5rem 1rem', marginBottom: '1rem' }}
-              >
-                {isSyncing ? 'Syncing...' : 'Start Full Sync (kind:1)'}
-              </button>
-              {/* Sync Progress Display Area */}
-              <div style={{ minHeight: '4em' }}>
-                <div>
-                  <strong>Status:</strong> {syncProgress.message}
-                </div>
-                {/* Display timestamp when available */}
-                {syncProgress.syncedUntilTimestamp && (
-                  <div style={{ fontSize: '0.9em', color: '#555' }}>
-                    Processed events before:{' '}
-                    {new Date(
-                      syncProgress.syncedUntilTimestamp * 1000,
-                    ).toLocaleString()}
-                  </div>
-                )}
-                {/* Display current event ID during sync */}
-                {isSyncing && syncProgress.currentEventId && (
-                  <div style={{ fontSize: '0.9em', color: '#555' }}>
-                    Current Event:{' '}
-                    {syncProgress.currentEventId.substring(0, 10)}...
-                  </div>
-                )}
-                {/* Display error details if status is error */}
-                {syncProgress.status === 'error' &&
-                  syncProgress.errorDetails && (
-                    <div
-                      style={{
-                        fontSize: '0.9em',
-                        color: 'red',
-                        marginTop: '0.5em',
-                      }}
-                    >
-                      <strong>Details:</strong> {syncProgress.errorDetails}
-                    </div>
-                  )}
-                {/* Display success message on completion */}
-                {syncProgress.status === 'complete' && (
-                  <div
-                    style={{
-                      color: 'green',
-                      fontWeight: 'bold',
-                      marginTop: '0.5em',
-                    }}
-                  >
-                    Synchronization finished!
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            // Warning if no write relays are found
-            <div style={{ marginTop: '1rem', color: 'orange' }}>
-              Warning: No 'write' relays found in NIP-65 list. Sync cannot
-              proceed.
-            </div>
-          )}
-        </div>
-      )}
       {/* Message if NIP-65 could not be fetched */}
       {!outboxRelays && decodedHex && !isDecoding && !decodeError && (
         <div style={{ marginTop: '1rem', color: 'orange' }}>
           Could not find or fetch NIP-65 relay list (kind:10002). Sync is not
-          possible. Ensure the user has published a kind:10002 event to common
-          relays.
+          possible.
         </div>
       )}
     </div>
