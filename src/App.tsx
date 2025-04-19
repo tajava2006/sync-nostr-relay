@@ -1,6 +1,6 @@
 import { Filter } from 'nostr-tools';
 import { nip19 } from 'nostr-tools';
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { RelayInfo, SyncProgress } from './components/types';
 import { SyncPanel } from './components/SyncPanel';
 import {
@@ -11,6 +11,46 @@ import {
 } from './components/util';
 import { InputSection } from './components/InputSection';
 import { DecodedInfoSection } from './components/DecodedInfoSection';
+import NDK, { NDKNip07Signer, NDKUser, NDKRelay } from '@nostr-dev-kit/ndk';
+import { DEFAULT_RELAYS } from './components/constant';
+
+// Create NDK instance (outside component)
+const ndk = new NDK({
+  explicitRelayUrls: DEFAULT_RELAYS,
+});
+
+// Define the authentication policy function
+// This function is called for *each relay* when an AUTH challenge is received.
+// It should decide whether to authenticate and return true/false.
+// NDK will then handle calling the signer if it returns true.
+const autoAuthPolicy = async (relay: NDKRelay, challenge: string) => {
+  console.log(`AUTH challenge received from ${relay.url}:`, challenge);
+
+  // --- Your Logic Here ---
+  // Decide if you want to automatically sign the challenge for this relay.
+  // For example:
+  // 1. Always attempt to authenticate if a signer is present:
+  const shouldAuth = !!ndk.signer; // Authenticate if we have a signer
+
+  // 2. Or, authenticate only for specific relays:
+  // const trustedAuthRelays = ['wss://your-trusted-relay.com'];
+  // const shouldAuth = !!ndk.signer && trustedAuthRelays.includes(relay.url);
+
+  // 3. Or, maybe prompt the user here if not using NIP-07 (less common for auto-auth)
+
+  if (shouldAuth) {
+    console.log(
+      `Policy decides to authenticate with ${relay.url}. NDK will use the signer.`,
+    );
+    return true; // Tell NDK to proceed with authentication using ndk.signer
+  } else {
+    console.log(`Policy decides *not* to authenticate with ${relay.url}.`);
+    return false; // Tell NDK *not* to authenticate
+  }
+};
+// --- Configure NDK with the Auth Policy ---
+// Option A: Set a default policy for all relays managed by NDK
+ndk.relayAuthDefaultPolicy = autoAuthPolicy;
 
 // Main React App component
 function App() {
@@ -40,6 +80,15 @@ function App() {
     status: 'idle',
     message: 'Ready.',
   });
+
+  const [loggedInUser, setLoggedInUser] = useState<NDKUser | null>(null);
+
+  useEffect(() => {
+    ndk
+      .connect()
+      .then(() => console.log('NDK Connected!'))
+      .catch((err) => console.error('NDK Connection Error:', err));
+  }, []);
 
   // Handler for the Decode button click
   const handleDecode = useCallback(async () => {
@@ -204,6 +253,33 @@ function App() {
     readSyncProgress.status,
   ]);
 
+  const handleNip07Login = useCallback(async () => {
+    if (!window.nostr) {
+      console.error('NIP-07 Extension not found on login attempt.');
+      alert(
+        'NIP-07 compatible extension (like Alby, nos2x) not found. Please install one and refresh the page.',
+      );
+      return;
+    }
+    try {
+      const signer = new NDKNip07Signer();
+      ndk.signer = signer;
+      const user = await signer.user();
+      console.log('NIP-07 User:', user);
+      setInput(user.nprofile);
+      setLoggedInUser(user);
+      user.ndk = ndk;
+      await user.fetchProfile();
+    } catch (error) {
+      console.error('NIP-07 Login failed:', error);
+      alert(
+        `Login failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      ndk.signer = undefined;
+      setLoggedInUser(null);
+    }
+  }, []);
+
   // Render the UI
   return (
     <div
@@ -215,6 +291,28 @@ function App() {
       }}
     >
       <h1>Nostr Event Synchronizer</h1>
+
+      <div
+        style={{
+          marginBottom: '1rem',
+          paddingBottom: '1rem',
+          borderBottom: '1px solid #eee',
+        }}
+      >
+        {loggedInUser ? (
+          <div>
+            Logged in as:{' '}
+            <strong>{nip19.npubEncode(loggedInUser.pubkey)}</strong>
+            {/* 로그아웃 버튼 등 */}
+          </div>
+        ) : (
+          // --- 항상 로그인 버튼 표시 ---
+          <button onClick={handleNip07Login}>
+            Login with Extension (NIP-07)
+          </button>
+        )}
+      </div>
+
       <p>
         Syncs past events to your designated write and read relays based on
         NIP-65.
