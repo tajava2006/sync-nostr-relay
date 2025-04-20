@@ -135,7 +135,11 @@ function App() {
       }));
 
       // Fetch the NIP-65 relay list
-      const relayInfo = await fetchOutboxRelays(pubkeyHex, relaysFromProfile);
+      const relayInfo = await fetchOutboxRelays(
+        ndk,
+        pubkeyHex,
+        relaysFromProfile,
+      );
       if (relayInfo) {
         setOutboxRelays(relayInfo);
         const writeCount = relayInfo.filter(isWriteRelay).length;
@@ -269,7 +273,6 @@ function App() {
       setInput(user.nprofile);
       setLoggedInUser(user);
       user.ndk = ndk;
-      await user.fetchProfile();
     } catch (error) {
       console.error('NIP-07 Login failed:', error);
       alert(
