@@ -1,7 +1,13 @@
 import { Event, Filter, SimplePool } from "nostr-tools";
 import { RelayInfo, SyncProgress } from "./types";
 import { normalizeURL } from "nostr-tools/utils";
-import { DEFAULT_RELAYS, NOSTR_TOOLS_DEFAULT_CLOSE_REASON } from "./constant";
+import { NOSTR_TOOLS_DEFAULT_CLOSE_REASON } from './constant';
+import NDK, {
+  NDKEvent,
+  NDKFilter,
+  NDKKind,
+  NDKRelaySet,
+} from '@nostr-dev-kit/ndk';
 
 // Helper function to check if a relay is marked for writing
 export const isWriteRelay = (relayInfo: RelayInfo): boolean => {
@@ -13,21 +19,25 @@ export const isReadRelay = (relayInfo: RelayInfo): boolean => {
   return relayInfo.type.includes('Read');
 };
 
- 
 // Fetches the user's NIP-65 relay list (kind:10002)
 export async function fetchOutboxRelays(
+  ndk: NDK,
   pubkey: string,
-  relays: string[] | null,
+  profileRelayHints: string[] | null,
 ): Promise<RelayInfo[] | null> {
-  const relaysToQuery = relays && relays.length > 0 ? relays : DEFAULT_RELAYS;
-  const pool = new SimplePool();
   try {
-    // Get the latest NIP-65 event
-    const event = await pool.get(relaysToQuery, {
-      kinds: [10002],
+    const filter: NDKFilter = {
+      kinds: [NDKKind.RelayList],
       authors: [pubkey],
-      // limit: 1 // SimplePool's get already implies limit 1 based on latest
-    });
+    };
+
+    let event: NDKEvent | null = null;
+    if (profileRelayHints) {
+      const relaySet = NDKRelaySet.fromRelayUrls(profileRelayHints, ndk);
+      event = await ndk.fetchEvent(filter, {}, relaySet);
+    } else {
+      event = await ndk.fetchEvent(filter);
+    }
 
     if (event && event.tags) {
       // Parse the 'r' tags into RelayInfo objects
@@ -43,13 +53,13 @@ export async function fetchOutboxRelays(
         }));
       return relayInfo.length > 0 ? relayInfo : null; // Return null if no valid 'r' tags found
     }
-    return null; // No NIP-65 event found
-  } catch (e) {
-    console.error('Outbox relay fetch error:', e);
+    console.log(
+      `NIP-65 (Kind ${NDKKind.RelayList}) event not found for pubkey: ${pubkey}`,
+    );
     return null;
-  } finally {
-    // Ensure pool resources are released
-    pool.destroy();
+  } catch (e) {
+    console.error('NDK Outbox relay fetch error:', e);
+    return null;
   }
 }
 
