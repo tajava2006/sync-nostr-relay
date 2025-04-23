@@ -66,6 +66,7 @@ export async function fetchOutboxRelays(
 
 // Generalized sync function
 export async function syncEvents(
+  ndk: NDK,
   targetRealyUrls: string[],
   filter: Filter,
   updateProgress: (progress: SyncProgress) => void,
@@ -80,303 +81,315 @@ export async function syncEvents(
     return false;
   }
 
-  // Create a pool for the sync process and enable tracking
-  const syncPool = new SimplePool();
-  syncPool.trackRelays = true; // Enable tracking which relays have which events
-
-  // Initialize pagination timestamp and counters
-  let syncUntilTimestamp = Math.floor(Date.now() / 1000);
-  const batchSize = 20; // Number of events to fetch per batch
-  // Apply initial batchSize limit to the passed filter
-  filter.limit = batchSize;
-  let allSynced = true; // Flag to track if the process completed without errors
-  let totalSyncedCount = 0; // Counter for successfully synced/verified events
-
-  updateProgress({
-    status: 'fetching_batch', // Initial status before loop
-    message: `Identified ${targetRealyUrls.length} target relays. Starting sync...`,
-    syncedUntilTimestamp: syncUntilTimestamp, // Set initial timestamp
-  });
-  console.log(
-    'Starting sync for filter:',
+  filter.limit = 10;
+  const relaySet = NDKRelaySet.fromRelayUrls(targetRealyUrls, ndk);
+  const a = ndk.fetchEvent(
     filter,
-    'on relays:',
-    targetRealyUrls,
+    {
+      groupable: true,
+    },
+    relaySet,
   );
+  console.log(a, 99999);
+  return false;
 
-  try {
-    // Main loop for paginated fetching and syncing
-    while (true) {
-      // Update progress for the current batch fetch
-      updateProgress({
-        status: 'fetching_batch',
-        message: `Fetching max ${batchSize} notes before ${new Date(syncUntilTimestamp * 1000).toLocaleString()}... (Total synced: ${totalSyncedCount})`,
-        syncedUntilTimestamp: syncUntilTimestamp, // Pass current timestamp
-      });
+  // // Create a pool for the sync process and enable tracking
+  // const syncPool = new SimplePool();
+  // syncPool.trackRelays = true; // Enable tracking which relays have which events
 
-      // Update filter for pagination
-      filter.until = syncUntilTimestamp;
+  // // Initialize pagination timestamp and counters
+  // let syncUntilTimestamp = Math.floor(Date.now() / 1000);
+  // const batchSize = 20; // Number of events to fetch per batch
+  // // Apply initial batchSize limit to the passed filter
+  // filter.limit = batchSize;
+  // let allSynced = true; // Flag to track if the process completed without errors
+  // let totalSyncedCount = 0; // Counter for successfully synced/verified events
 
-      const eventsBeforeSliced: Event[] = [];
-      try {
-        const batchFetchTimeoutMs = 15_000; // Example: 15 seconds
-        // console.log(`Querying relays ${targetRealyUrls.join(', ')}`);
-        await new Promise((resolve, reject) => {
-          let isHandled = false; // Flag to prevent duplicate handling
+  // updateProgress({
+  //   status: 'fetching_batch', // Initial status before loop
+  //   message: `Identified ${targetRealyUrls.length} target relays. Starting sync...`,
+  //   syncedUntilTimestamp: syncUntilTimestamp, // Set initial timestamp
+  // });
+  // console.log(
+  //   'Starting sync for filter:',
+  //   filter,
+  //   'on relays:',
+  //   targetRealyUrls,
+  // );
 
-          const timeoutHandle = setTimeout(() => {
-            if (isHandled) return;
-            isHandled = true;
-            allSynced = false;
-            console.error(
-              `>>> Batch fetch timeout (${batchFetchTimeoutMs - 3_000}ms) exceeded.`,
-            );
-            try {
-              sub?.close();
-            } catch (e) {
-              console.warn(e);
-            }
-            reject(
-              new Error(
-                `Batch fetch timed out after ${batchFetchTimeoutMs - 3_000}ms`,
-              ),
-            );
-          }, batchFetchTimeoutMs - 3_000);
+  // try {
+  //   // Main loop for paginated fetching and syncing
+  //   while (true) {
+  //     // Update progress for the current batch fetch
+  //     updateProgress({
+  //       status: 'fetching_batch',
+  //       message: `Fetching max ${batchSize} notes before ${new Date(syncUntilTimestamp * 1000).toLocaleString()}... (Total synced: ${totalSyncedCount})`,
+  //       syncedUntilTimestamp: syncUntilTimestamp, // Pass current timestamp
+  //     });
 
-          const sub = syncPool.subscribe(targetRealyUrls, filter, {
-            maxWait: batchFetchTimeoutMs,
-            onevent(event: Event) {
-              eventsBeforeSliced.push(event);
-            },
-            oneose: () => {
-              if (isHandled) return;
-              isHandled = true;
-              clearTimeout(timeoutHandle);
-              console.log(
-                `EOSE received. Total events fetched: ${eventsBeforeSliced.length}`,
-              );
-              sub.close();
-            },
-            onclose: (reasons) => {
-              // Note: This will be called AFTER oneose because of nostr-tools SimplePool behavior
-              isHandled = true; // Mark as handled to prevent potential race with oneose/timeout
-              clearTimeout(timeoutHandle);
-              const expectedReason = NOSTR_TOOLS_DEFAULT_CLOSE_REASON;
-              console.log('Closed handler, reasons: ', reasons);
-              const unexpectedReasons = reasons.filter(
-                (reason) => reason !== expectedReason,
-              );
-              if (unexpectedReasons.length > 0) {
-                console.error(
-                  '>>> Unexpected closure detected:',
-                  unexpectedReasons,
-                );
-                allSynced = false; // Set flag to break outer loop
-                reject(
-                  new Error(
-                    `Unexpected closure: ${unexpectedReasons.join(', ')}`,
-                  ),
-                ); // Reject on unexpected close
-              } else {
-                resolve(eventsBeforeSliced);
-              }
-            },
-          });
-        }); // End of new Promise
-        console.log(
-          `Fetched ${eventsBeforeSliced.length} events for batch before ${syncUntilTimestamp}`,
-        );
-      } catch (queryError: any) {
-        console.error('Error fetching event batch with querySync:', queryError);
-        // Update progress on fetch error, preserving the last known timestamp
-        updateProgress({
-          status: 'error',
-          message: `Error fetching event batch.`,
-          syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp
-          errorDetails: queryError.message || String(queryError), // Add error details
-        });
-        allSynced = false;
-        break; // Exit the loop on fetch error
-      }
+  //     // Update filter for pagination
+  //     filter.until = syncUntilTimestamp;
 
-      // Check if no more events were found in the specified time range
-      if (eventsBeforeSliced.length === 0) {
-        updateProgress({
-          status: 'complete',
-          message: `Sync complete! No more older events found. Total synced: ${totalSyncedCount}`,
-          syncedUntilTimestamp: syncUntilTimestamp, // Keep the final timestamp
-        });
-        console.log('Sync complete');
-        break; // Exit the loop, sync finished
-      }
+  //     const eventsBeforeSliced: Event[] = [];
+  //     try {
+  //       const batchFetchTimeoutMs = 15_000; // Example: 15 seconds
+  //       // console.log(`Querying relays ${targetRealyUrls.join(', ')}`);
+  //       await new Promise((resolve, reject) => {
+  //         let isHandled = false; // Flag to prevent duplicate handling
 
-      // Sort events newest first to prepare for slicing
-      eventsBeforeSliced.sort((a, b) => b.created_at - a.created_at);
+  //         const timeoutHandle = setTimeout(() => {
+  //           if (isHandled) return;
+  //           isHandled = true;
+  //           allSynced = false;
+  //           console.error(
+  //             `>>> Batch fetch timeout (${batchFetchTimeoutMs - 3_000}ms) exceeded.`,
+  //           );
+  //           try {
+  //             sub?.close();
+  //           } catch (e) {
+  //             console.warn(e);
+  //           }
+  //           reject(
+  //             new Error(
+  //               `Batch fetch timed out after ${batchFetchTimeoutMs - 3_000}ms`,
+  //             ),
+  //           );
+  //         }, batchFetchTimeoutMs - 3_000);
 
-      // Slice the fetched events to the target batch size. This prevents skipping events if one relay
-      // provides much older events than another within the querySync limit, ensuring the next 'until'
-      // timestamp is based on processed data
-      const events = eventsBeforeSliced.slice(0, batchSize);
+  //         const sub = syncPool.subscribe(targetRealyUrls, filter, {
+  //           maxWait: batchFetchTimeoutMs,
+  //           onevent(event: Event) {
+  //             eventsBeforeSliced.push(event);
+  //           },
+  //           oneose: () => {
+  //             if (isHandled) return;
+  //             isHandled = true;
+  //             clearTimeout(timeoutHandle);
+  //             console.log(
+  //               `EOSE received. Total events fetched: ${eventsBeforeSliced.length}`,
+  //             );
+  //             sub.close();
+  //           },
+  //           onclose: (reasons) => {
+  //             // Note: This will be called AFTER oneose because of nostr-tools SimplePool behavior
+  //             isHandled = true; // Mark as handled to prevent potential race with oneose/timeout
+  //             clearTimeout(timeoutHandle);
+  //             const expectedReason = NOSTR_TOOLS_DEFAULT_CLOSE_REASON;
+  //             console.log('Closed handler, reasons: ', reasons);
+  //             const unexpectedReasons = reasons.filter(
+  //               (reason) => reason !== expectedReason,
+  //             );
+  //             if (unexpectedReasons.length > 0) {
+  //               console.error(
+  //                 '>>> Unexpected closure detected:',
+  //                 unexpectedReasons,
+  //               );
+  //               allSynced = false; // Set flag to break outer loop
+  //               reject(
+  //                 new Error(
+  //                   `Unexpected closure: ${unexpectedReasons.join(', ')}`,
+  //                 ),
+  //               ); // Reject on unexpected close
+  //             } else {
+  //               resolve(eventsBeforeSliced);
+  //             }
+  //           },
+  //         });
+  //       }); // End of new Promise
+  //       console.log(
+  //         `Fetched ${eventsBeforeSliced.length} events for batch before ${syncUntilTimestamp}`,
+  //       );
+  //     } catch (queryError: any) {
+  //       console.error('Error fetching event batch with querySync:', queryError);
+  //       // Update progress on fetch error, preserving the last known timestamp
+  //       updateProgress({
+  //         status: 'error',
+  //         message: `Error fetching event batch.`,
+  //         syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp
+  //         errorDetails: queryError.message || String(queryError), // Add error details
+  //       });
+  //       allSynced = false;
+  //       break; // Exit the loop on fetch error
+  //     }
 
-      // Calculate the timestamp for the next iteration based on the *sliced* batch
-      const batchOldestTimestamp = events[events.length - 1].created_at;
+  //     // Check if no more events were found in the specified time range
+  //     if (eventsBeforeSliced.length === 0) {
+  //       updateProgress({
+  //         status: 'complete',
+  //         message: `Sync complete! No more older events found. Total synced: ${totalSyncedCount}`,
+  //         syncedUntilTimestamp: syncUntilTimestamp, // Keep the final timestamp
+  //       });
+  //       console.log('Sync complete');
+  //       break; // Exit the loop, sync finished
+  //     }
 
-      // console.log(eventsBeforeSliced, batchOldestTimestamp, syncUntilTimestamp, totalSyncedCount, 111);
-      // return false;
+  //     // Sort events newest first to prepare for slicing
+  //     eventsBeforeSliced.sort((a, b) => b.created_at - a.created_at);
 
-      // Process each event in the fetched batch
-      for (const event of events) {
-        // Update progress for the specific event being processed
-        updateProgress({
-          status: 'syncing_event',
-          message: `Syncing event ${event.id.substring(0, 8)}... (created: ${new Date(event.created_at * 1000).toLocaleString()})`,
-          currentEventId: event.id,
-          syncedUntilTimestamp: syncUntilTimestamp, // Keep timestamp during sync
-        });
-        console.log(
-          `Attempting to sync event ${event.id} to ${targetRealyUrls.length} target relays.`,
-        );
+  //     // Slice the fetched events to the target batch size. This prevents skipping events if one relay
+  //     // provides much older events than another within the querySync limit, ensuring the next 'until'
+  //     // timestamp is based on processed data
+  //     const events = eventsBeforeSliced.slice(0, batchSize);
 
-        // Get the set of relays known to have seen this event
-        const relaysThatHaveEventSet = syncPool.seenOn.get(event.id);
+  //     // Calculate the timestamp for the next iteration based on the *sliced* batch
+  //     const batchOldestTimestamp = events[events.length - 1].created_at;
 
-        // Convert the set to a list of URLs, handling cases where the set might be missing
-        const urlsThatHaveEvent = relaysThatHaveEventSet
-          ? Array.from(relaysThatHaveEventSet).map((r) => r.url)
-          : [];
+  //     // console.log(eventsBeforeSliced, batchOldestTimestamp, syncUntilTimestamp, totalSyncedCount, 111);
+  //     // return false;
 
-        // Determine which relays *don't* have this event according to seenOn
-        const relaysToPublishTo = targetRealyUrls.filter(
-          (url) => !urlsThatHaveEvent.includes(url),
-        );
+  //     // Process each event in the fetched batch
+  //     for (const event of events) {
+  //       // Update progress for the specific event being processed
+  //       updateProgress({
+  //         status: 'syncing_event',
+  //         message: `Syncing event ${event.id.substring(0, 8)}... (created: ${new Date(event.created_at * 1000).toLocaleString()})`,
+  //         currentEventId: event.id,
+  //         syncedUntilTimestamp: syncUntilTimestamp, // Keep timestamp during sync
+  //       });
+  //       console.log(
+  //         `Attempting to sync event ${event.id} to ${targetRealyUrls.length} target relays.`,
+  //       );
 
-        // If all target relays already have the event, skip publishing
-        if (relaysToPublishTo.length === 0) {
-          console.log(
-            `Event ${event.id.substring(0, 8)} already exists on all target relays according to seenOn.`,
-          );
-          totalSyncedCount++; // Count as synced/verified
-          continue; // Move to the next event in the batch
-        }
+  //       // Get the set of relays known to have seen this event
+  //       const relaysThatHaveEventSet = syncPool.seenOn.get(event.id);
 
-        console.log(
-          `Publishing event ${event.id.substring(0, 8)} to ${relaysToPublishTo.length} relays: ${relaysToPublishTo.join(', ')}`,
-        );
+  //       // Convert the set to a list of URLs, handling cases where the set might be missing
+  //       const urlsThatHaveEvent = relaysThatHaveEventSet
+  //         ? Array.from(relaysThatHaveEventSet).map((r) => r.url)
+  //         : [];
 
-        try {
-          // Publish the event only to the relays that don't have it
-          const publishPromises = syncPool.publish(relaysToPublishTo, event);
+  //       // Determine which relays *don't* have this event according to seenOn
+  //       const relaysToPublishTo = targetRealyUrls.filter(
+  //         (url) => !urlsThatHaveEvent.includes(url),
+  //       );
 
-          // Wait for all publish attempts to settle (succeed or fail)
-          const results = await Promise.allSettled(publishPromises);
+  //       // If all target relays already have the event, skip publishing
+  //       if (relaysToPublishTo.length === 0) {
+  //         console.log(
+  //           `Event ${event.id.substring(0, 8)} already exists on all target relays according to seenOn.`,
+  //         );
+  //         totalSyncedCount++; // Count as synced/verified
+  //         continue; // Move to the next event in the batch
+  //       }
 
-          const failedRelays: string[] = [];
-          // Check the results for each publish attempt
-          results.forEach((result, index) => {
-            if (result.status === 'rejected') {
-              // If a publish failed, record the relay URL and reason
-              const failedUrl = relaysToPublishTo[index];
-              failedRelays.push(failedUrl);
-              console.error(
-                `Failed to publish event ${event.id.substring(0, 8)} to relay ${failedUrl}:`,
-                result.reason, // Log the specific reason (e.g., 'timed out', 'blocked: rate-limited')
-              );
-            } else {
-              // Log success for clarity
-              const successUrl = relaysToPublishTo[index];
-              console.log(
-                `Publish confirmed/sent for event ${event.id.substring(0, 8)} to relay ${successUrl}: ${result.value}`,
-              );
-            }
-          });
+  //       console.log(
+  //         `Publishing event ${event.id.substring(0, 8)} to ${relaysToPublishTo.length} relays: ${relaysToPublishTo.join(', ')}`,
+  //       );
 
-          // If any publishes failed, stop the entire sync process
-          if (failedRelays.length > 0) {
-            // Extract specific reasons if possible, otherwise join URLs
-            const failureReasons = results
-              .filter((res) => res.status === 'rejected')
-              .map((res: PromiseRejectedResult) => String(res.reason)) // Convert reasons to strings
-              .join('; '); // Join reasons with semicolon
+  //       try {
+  //         // Publish the event only to the relays that don't have it
+  //         const publishPromises = syncPool.publish(relaysToPublishTo, event);
 
-            const errorMsg = `Error: Failed to publish event ${event.id.substring(0, 8)} to ${failedRelays.length} relays. Stopping sync.`;
-            updateProgress({
-              status: 'error',
-              message: errorMsg,
-              currentEventId: event.id,
-              syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp on error
-              errorDetails: `Failed relays: ${failedRelays.join(', ')}. Reasons: ${failureReasons}`, // Provide detailed error info
-            });
-            console.error(errorMsg);
-            allSynced = false;
-            break; // Exit the inner for loop
-          } else {
-            // If all publishes succeeded for this event
-            totalSyncedCount++; // Increment the synced count
-          }
-        } catch (publishError: any) {
-          // Catch unexpected errors during the publish phase
-          const errorMsg = `Unexpected error publishing event ${event.id}: ${publishError.message || publishError}. Stopping sync.`;
-          updateProgress({
-            status: 'error',
-            message: errorMsg,
-            currentEventId: event.id,
-            syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp on error
-            errorDetails: String(publishError), // Provide error details
-          });
-          console.error(errorMsg, publishError);
-          allSynced = false;
-          break; // Exit the inner for loop
-        }
+  //         // Wait for all publish attempts to settle (succeed or fail)
+  //         const results = await Promise.allSettled(publishPromises);
 
-        // Optional delay between publishing individual events within a batch to reduce load
-        await new Promise((resolve) => setTimeout(resolve, 5_000)); // e.g., 5s delay
-      } // End of for (const event of events) loop
+  //         const failedRelays: string[] = [];
+  //         // Check the results for each publish attempt
+  //         results.forEach((result, index) => {
+  //           if (result.status === 'rejected') {
+  //             // If a publish failed, record the relay URL and reason
+  //             const failedUrl = relaysToPublishTo[index];
+  //             failedRelays.push(failedUrl);
+  //             console.error(
+  //               `Failed to publish event ${event.id.substring(0, 8)} to relay ${failedUrl}:`,
+  //               result.reason, // Log the specific reason (e.g., 'timed out', 'blocked: rate-limited')
+  //             );
+  //           } else {
+  //             // Log success for clarity
+  //             const successUrl = relaysToPublishTo[index];
+  //             console.log(
+  //               `Publish confirmed/sent for event ${event.id.substring(0, 8)} to relay ${successUrl}: ${result.value}`,
+  //             );
+  //           }
+  //         });
 
-      // If an error occurred within the inner loop, exit the outer while loop too
-      if (!allSynced) {
-        break;
-      }
+  //         // If any publishes failed, stop the entire sync process
+  //         if (failedRelays.length > 0) {
+  //           // Extract specific reasons if possible, otherwise join URLs
+  //           const failureReasons = results
+  //             .filter((res) => res.status === 'rejected')
+  //             .map((res: PromiseRejectedResult) => String(res.reason)) // Convert reasons to strings
+  //             .join('; '); // Join reasons with semicolon
 
-      // Update the timestamp for the next batch fetch
-      // Use the timestamp of the oldest event processed in this batch
-      syncUntilTimestamp = batchOldestTimestamp;
+  //           const errorMsg = `Error: Failed to publish event ${event.id.substring(0, 8)} to ${failedRelays.length} relays. Stopping sync.`;
+  //           updateProgress({
+  //             status: 'error',
+  //             message: errorMsg,
+  //             currentEventId: event.id,
+  //             syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp on error
+  //             errorDetails: `Failed relays: ${failedRelays.join(', ')}. Reasons: ${failureReasons}`, // Provide detailed error info
+  //           });
+  //           console.error(errorMsg);
+  //           allSynced = false;
+  //           break; // Exit the inner for loop
+  //         } else {
+  //           // If all publishes succeeded for this event
+  //           totalSyncedCount++; // Increment the synced count
+  //         }
+  //       } catch (publishError: any) {
+  //         // Catch unexpected errors during the publish phase
+  //         const errorMsg = `Unexpected error publishing event ${event.id}: ${publishError.message || publishError}. Stopping sync.`;
+  //         updateProgress({
+  //           status: 'error',
+  //           message: errorMsg,
+  //           currentEventId: event.id,
+  //           syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp on error
+  //           errorDetails: String(publishError), // Provide error details
+  //         });
+  //         console.error(errorMsg, publishError);
+  //         allSynced = false;
+  //         break; // Exit the inner for loop
+  //       }
 
-      // Update progress after completing a batch successfully
-      updateProgress({
-        status: 'batch_complete',
-        message: `Batch synced. Continuing before ${new Date(syncUntilTimestamp * 1000).toLocaleString()} (Total synced: ${totalSyncedCount})`,
-        syncedUntilTimestamp: syncUntilTimestamp,
-      });
+  //       // Optional delay between publishing individual events within a batch to reduce load
+  //       await new Promise((resolve) => setTimeout(resolve, 5_000)); // e.g., 5s delay
+  //     } // End of for (const event of events) loop
 
-      // Optional delay between batches to avoid overwhelming relays
-      await new Promise((resolve) => setTimeout(resolve, 10_000)); // e.g., 10s delay
+  //     // If an error occurred within the inner loop, exit the outer while loop too
+  //     if (!allSynced) {
+  //       break;
+  //     }
 
-      // If the number of events fetched was less than the batch size, we've likely reached the end
-      if (events.length < batchSize) {
-        updateProgress({
-          status: 'complete',
-          message: `Sync complete! Reached end of history. Total synced: ${totalSyncedCount}`,
-          syncedUntilTimestamp: syncUntilTimestamp, // Keep the final timestamp
-        });
-        console.log('Sync complete - likely reached end of history.');
-        break; // Exit the loop, sync finished
-      }
-    } // End of while(true) loop
-  } catch (error: any) {
-    // Catch any other unhandled errors in the sync process
-    updateProgress({
-      status: 'error',
-      message: `Unhandled sync error.`,
-      syncedUntilTimestamp: syncUntilTimestamp, // Try to keep timestamp if available
-      errorDetails: error.message || String(error), // Provide error details
-    });
-    console.error('Unhandled sync error:', error);
-    allSynced = false;
-  } finally {
-    // Clean up the pool resources regardless of success or failure
-    syncPool.destroy(); // if available and appropriate
-  }
+  //     // Update the timestamp for the next batch fetch
+  //     // Use the timestamp of the oldest event processed in this batch
+  //     syncUntilTimestamp = batchOldestTimestamp;
 
-  // Return whether the sync completed without errors
-  return allSynced;
+  //     // Update progress after completing a batch successfully
+  //     updateProgress({
+  //       status: 'batch_complete',
+  //       message: `Batch synced. Continuing before ${new Date(syncUntilTimestamp * 1000).toLocaleString()} (Total synced: ${totalSyncedCount})`,
+  //       syncedUntilTimestamp: syncUntilTimestamp,
+  //     });
+
+  //     // Optional delay between batches to avoid overwhelming relays
+  //     await new Promise((resolve) => setTimeout(resolve, 10_000)); // e.g., 10s delay
+
+  //     // If the number of events fetched was less than the batch size, we've likely reached the end
+  //     if (events.length < batchSize) {
+  //       updateProgress({
+  //         status: 'complete',
+  //         message: `Sync complete! Reached end of history. Total synced: ${totalSyncedCount}`,
+  //         syncedUntilTimestamp: syncUntilTimestamp, // Keep the final timestamp
+  //       });
+  //       console.log('Sync complete - likely reached end of history.');
+  //       break; // Exit the loop, sync finished
+  //     }
+  //   } // End of while(true) loop
+  // } catch (error: any) {
+  //   // Catch any other unhandled errors in the sync process
+  //   updateProgress({
+  //     status: 'error',
+  //     message: `Unhandled sync error.`,
+  //     syncedUntilTimestamp: syncUntilTimestamp, // Try to keep timestamp if available
+  //     errorDetails: error.message || String(error), // Provide error details
+  //   });
+  //   console.error('Unhandled sync error:', error);
+  //   allSynced = false;
+  // } finally {
+  //   // Clean up the pool resources regardless of success or failure
+  //   syncPool.destroy(); // if available and appropriate
+  // }
+
+  // // Return whether the sync completed without errors
+  // return allSynced;
 }

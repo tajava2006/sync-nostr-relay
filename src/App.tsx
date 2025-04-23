@@ -11,12 +11,20 @@ import {
 } from './components/util';
 import { InputSection } from './components/InputSection';
 import { DecodedInfoSection } from './components/DecodedInfoSection';
-import NDK, { NDKNip07Signer, NDKUser, NDKRelay } from '@nostr-dev-kit/ndk';
+import NDK, {
+  NDKNip07Signer,
+  NDKUser,
+  NDKRelay,
+  NostrEvent,
+} from '@nostr-dev-kit/ndk';
 import { DEFAULT_RELAYS } from './components/constant';
 
 // Create NDK instance (outside component)
 const ndk = new NDK({
   explicitRelayUrls: DEFAULT_RELAYS,
+  enableOutboxModel: true,
+  autoFetchUserMutelist: false,
+  autoConnectUserRelays: true,
 });
 
 // Define the authentication policy function
@@ -51,6 +59,20 @@ const autoAuthPolicy = async (relay: NDKRelay, challenge: string) => {
 // --- Configure NDK with the Auth Policy ---
 // Option A: Set a default policy for all relays managed by NDK
 ndk.relayAuthDefaultPolicy = autoAuthPolicy;
+
+// ndk.subManager.dispatchEvent = (
+//   event: NostrEvent,
+//   relay?: NDKRelay,
+//   optimisticPublish?,
+// ) => {
+//   event;
+//   relay;
+//   optimisticPublish;
+
+//   // The corresponding NDK function is suitable for general purposes,
+//   // but interferes with our goal of synchronizing between relays,
+//   // so we override it to disable its functionality.
+// };
 
 // Main React App component
 function App() {
@@ -184,6 +206,7 @@ function App() {
     setIsWriteSyncing(true);
     const filter: Filter = { kinds: [1, 6, 30023], authors: [decodedHex] };
     const success = await syncEvents(
+      ndk,
       targetWriteRelays,
       filter,
       setWriteSyncProgress,
@@ -229,6 +252,7 @@ function App() {
     // Define filter for "inbox" events (events mentioning the user)
     const filter: Filter = { '#p': [decodedHex], kinds: [1, 6, 7, 9735] };
     const success = await syncEvents(
+      ndk,
       targetReadRelays,
       filter,
       setReadSyncProgress,
