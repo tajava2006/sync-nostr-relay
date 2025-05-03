@@ -1,10 +1,10 @@
 {
   "files": {
-    "main.js": "/sync-nostr-relay/static/js/main.025d3dcd.js",
+    "main.js": "/sync-nostr-relay/static/js/main.e7f9e690.js",
     "index.html": "/sync-nostr-relay/index.html",
-    "main.025d3dcd.js.map": "/sync-nostr-relay/static/js/main.025d3dcd.js.map"
+    "main.e7f9e690.js.map": "/sync-nostr-relay/static/js/main.e7f9e690.js.map"
   },
   "entrypoints": [
-    "static/js/main.025d3dcd.js"
+    "static/js/main.e7f9e690.js"
   ]
 }
