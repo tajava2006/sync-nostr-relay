@@ -1,8 +1,8 @@
 import React, { useMemo } from 'react';
-import { RelayInfo, SyncProgress } from './types';
+import { RelayInfo, SyncProgress } from '../etc/types';
 import SyncSection from './SyncSection';
-import { isReadRelay, isWriteRelay } from './util';
-import { MAX_READ_RELAYS, MAX_WRITE_RELAYS } from './constant';
+import { isReadRelay, isWriteRelay } from '../etc/util';
+import { MAX_READ_RELAYS, MAX_WRITE_RELAYS } from '../etc/constant';
 
 interface SyncPanelProps {
   outboxRelays: RelayInfo[] | null;

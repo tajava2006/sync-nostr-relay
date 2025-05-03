@@ -5,10 +5,10 @@
   "homepage": "https://tajava2006.github.io/sync-nostr-relay",
   "type": "module",
   "dependencies": {
-    "@nostr-dev-kit/ndk": "^2.13.3",
+    "@nostr-dev-kit/ndk": "^2.14.9",
     "react": "^19.1.0",
-    "react-scripts": "5.0.1",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-scripts": "5.0.1"
   },
   "scripts": {
     "start": "react-scripts start",

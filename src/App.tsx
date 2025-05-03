@@ -1,23 +1,22 @@
-import { Filter } from 'nostr-tools';
 import { nip19 } from 'nostr-tools';
 import React, { useState, useCallback, useEffect } from 'react';
-import { RelayInfo, SyncProgress } from './components/types';
+import { RelayInfo, SyncProgress } from './etc/types';
 import { SyncPanel } from './components/SyncPanel';
 import {
   fetchOutboxRelays,
   isReadRelay,
   isWriteRelay,
   syncEvents,
-} from './components/util';
+} from './etc/util';
 import { InputSection } from './components/InputSection';
 import { DecodedInfoSection } from './components/DecodedInfoSection';
 import NDK, {
   NDKNip07Signer,
   NDKUser,
   NDKRelay,
-  NostrEvent,
+  NDKFilter,
 } from '@nostr-dev-kit/ndk';
-import { DEFAULT_RELAYS } from './components/constant';
+import { DEFAULT_RELAYS } from './etc/constant';
 
 // Create NDK instance (outside component)
 const ndk = new NDK({
@@ -59,20 +58,6 @@ const autoAuthPolicy = async (relay: NDKRelay, challenge: string) => {
 // --- Configure NDK with the Auth Policy ---
 // Option A: Set a default policy for all relays managed by NDK
 ndk.relayAuthDefaultPolicy = autoAuthPolicy;
-
-// ndk.subManager.dispatchEvent = (
-//   event: NostrEvent,
-//   relay?: NDKRelay,
-//   optimisticPublish?,
-// ) => {
-//   event;
-//   relay;
-//   optimisticPublish;
-
-//   // The corresponding NDK function is suitable for general purposes,
-//   // but interferes with our goal of synchronizing between relays,
-//   // so we override it to disable its functionality.
-// };
 
 // Main React App component
 function App() {
@@ -204,7 +189,7 @@ function App() {
     }
 
     setIsWriteSyncing(true);
-    const filter: Filter = { kinds: [1, 6, 30023], authors: [decodedHex] };
+    const filter: NDKFilter = { kinds: [1, 6, 30023], authors: [decodedHex] };
     const success = await syncEvents(
       ndk,
       targetWriteRelays,
@@ -250,7 +235,7 @@ function App() {
 
     setIsReadSyncing(true);
     // Define filter for "inbox" events (events mentioning the user)
-    const filter: Filter = { '#p': [decodedHex], kinds: [1, 6, 7, 9735] };
+    const filter: NDKFilter = { '#p': [decodedHex], kinds: [1, 6, 7, 9735] };
     const success = await syncEvents(
       ndk,
       targetReadRelays,
@@ -293,7 +278,7 @@ function App() {
       const signer = new NDKNip07Signer();
       ndk.signer = signer;
       const user = await signer.user();
-      console.log('NIP-07 User:', user);
+      // console.log('NIP-07 User:', user);
       setInput(user.nprofile);
       setLoggedInUser(user);
       user.ndk = ndk;
