@@ -1,4 +1,4 @@
-import { SyncProgress } from "./types";
+import { SyncProgress } from '../etc/types';
 
 interface SyncSectionProps {
   title: string;
