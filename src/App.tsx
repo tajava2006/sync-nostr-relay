@@ -1,7 +1,6 @@
 import { nip19 } from 'nostr-tools';
 import React, { useState, useCallback, useEffect } from 'react';
 import { RelayInfo, SyncProgress } from './etc/types';
-import { SyncPanel } from './components/SyncPanel';
 import {
   fetchOutboxRelays,
   isReadRelay,
@@ -16,7 +15,14 @@ import NDK, {
   NDKRelay,
   NDKFilter,
 } from '@nostr-dev-kit/ndk';
-import { DEFAULT_RELAYS } from './etc/constant';
+import {
+  DEFAULT_OLDEST_DATE_STR,
+  DEFAULT_RELAYS,
+  getDefaultStartDateStr,
+  MAX_READ_RELAYS,
+  MAX_WRITE_RELAYS,
+} from './etc/constant';
+import SyncSection from './components/SyncSection';
 
 // Create NDK instance (outside component)
 const ndk = new NDK({
@@ -87,6 +93,16 @@ function App() {
     status: 'idle',
     message: 'Ready.',
   });
+
+  const now = getDefaultStartDateStr();
+  const [writeStartDate, setWriteStartDate] = useState<string>(now);
+  const [writeEndDate, setWriteEndDate] = useState<string>(
+    DEFAULT_OLDEST_DATE_STR,
+  );
+  const [readStartDate, setReadStartDate] = useState<string>(now);
+  const [readEndDate, setReadEndDate] = useState<string>(
+    DEFAULT_OLDEST_DATE_STR,
+  );
 
   const [loggedInUser, setLoggedInUser] = useState<NDKUser | null>(null);
 
@@ -189,27 +205,57 @@ function App() {
     }
 
     setIsWriteSyncing(true);
+    // --- Determine initialUntil (Start Point) and stopAt (End Point) ---
+    let initialUntil: number;
+    const stopAt = Math.floor(new Date(writeEndDate).getTime() / 1000); // stopAt is always from writeEndDate (Oldest)
+
+    const canResume =
+      writeSyncProgress.syncedUntilTimestamp &&
+      writeSyncProgress.status === 'error';
+
+    if (canResume) {
+      // RESUME: Previous sync was interrupted AND user hasn't changed the StartDate (Newest)
+      initialUntil = writeSyncProgress.syncedUntilTimestamp!; // Start from where it left off
+      console.log(
+        `Resuming write sync from timestamp: ${new Date(initialUntil * 1000).toLocaleString()}`,
+      );
+    } else {
+      // START FRESH/RESTART: User changed StartDate, or it's the first run, or completed run
+      initialUntil = Math.floor(new Date(writeStartDate).getTime() / 1000); // Use the selected StartDate (Newest)
+      // Clear previous resume point when not resuming
+      setWriteSyncProgress((prev) => ({
+        ...prev,
+        syncedUntilTimestamp: undefined,
+      }));
+    }
+    // --- End timestamp determination --
     const filter: NDKFilter = { kinds: [1, 6, 30023], authors: [decodedHex] };
+
+    const updateWriteProgress = (progress: SyncProgress) => {
+      setWriteSyncProgress((prev) => ({
+        ...prev,
+        ...progress,
+        stopAtTimestamp: stopAt,
+      }));
+    };
+
     const success = await syncEvents(
       ndk,
       targetWriteRelays,
       filter,
-      setWriteSyncProgress,
+      initialUntil, // Pass determined starting 'until'
+      stopAt, // Pass determined stopping 'until' (oldest)
+      updateWriteProgress,
     );
     setIsWriteSyncing(false);
 
-    if (success && writeSyncProgress.status !== 'complete') {
+    if (success) {
       setWriteSyncProgress((prev) => ({
         ...prev,
         status: 'complete',
         message: 'Write sync finished!',
-      }));
-    } else if (!success && writeSyncProgress.status !== 'error') {
-      setWriteSyncProgress((prev) => ({
-        ...prev,
-        status: 'error',
-        message: 'Write sync stopped.',
-        errorDetails: prev.errorDetails || 'Unknown reason.',
+        syncedUntilTimestamp: undefined, // Clear resume point
+        stopAtTimestamp: undefined, // Clear stop point display info
       }));
     }
   }, [
@@ -217,7 +263,9 @@ function App() {
     outboxRelays,
     isWriteSyncing,
     isReadSyncing,
-    writeSyncProgress.status,
+    writeSyncProgress,
+    writeStartDate,
+    writeEndDate,
   ]);
 
   // Handler for starting Read Relay Sync
@@ -234,36 +282,73 @@ function App() {
     }
 
     setIsReadSyncing(true);
+
+    // --- Determine initialUntil (Start Point) and stopAt (End Point) for Read ---
+    let initialUntil: number;
+    const stopAt = Math.floor(new Date(readEndDate).getTime() / 1000); // stopAt is always from readEndDate (Oldest)
+
+    const canResume =
+      readSyncProgress.syncedUntilTimestamp &&
+      readSyncProgress.status !== 'error';
+
+    if (canResume) {
+      // RESUME
+      initialUntil = readSyncProgress.syncedUntilTimestamp!;
+      console.log(
+        `Resuming read sync from timestamp: ${new Date(initialUntil * 1000).toLocaleString()}`,
+      );
+    } else {
+      // START FRESH/RESTART
+      initialUntil = Math.floor(new Date(readStartDate).getTime() / 1000);
+      setReadSyncProgress((prev) => ({
+        ...prev,
+        syncedUntilTimestamp: undefined,
+      }));
+    }
+    // --- End timestamp determination ---
+
     // Define filter for "inbox" events (events mentioning the user)
     const filter: NDKFilter = { '#p': [decodedHex], kinds: [1, 6, 7, 9735] };
+
+    const updateReadProgress = (progress: SyncProgress) => {
+      setReadSyncProgress((prev) => ({
+        ...prev,
+        ...progress,
+        stopAtTimestamp: stopAt,
+      }));
+    };
+
     const success = await syncEvents(
       ndk,
       targetReadRelays,
       filter,
-      setReadSyncProgress,
+      initialUntil,
+      stopAt,
+      updateReadProgress,
     );
+
     setIsReadSyncing(false);
 
-    if (success && readSyncProgress.status !== 'complete') {
+    // --- 최종 상태 업데이트 (Read용) ---
+    if (success) {
+      // 성공 시 재개 정보 초기화
       setReadSyncProgress((prev) => ({
         ...prev,
         status: 'complete',
         message: 'Read sync finished!',
-      }));
-    } else if (!success && readSyncProgress.status !== 'error') {
-      setReadSyncProgress((prev) => ({
-        ...prev,
-        status: 'error',
-        message: 'Read sync stopped.',
-        errorDetails: prev.errorDetails || 'Unknown reason.',
+        syncedUntilTimestamp: undefined, // 재개 지점 초기화
+        stopAtTimestamp: undefined, // 종료 시점 초기화
       }));
     }
+    // 실패 시에는 syncEvents 내부의 updateReadProgress 콜백이 에러 상태 및 syncedUntilTimestamp를 설정했을 것임
   }, [
     decodedHex,
     outboxRelays,
     isWriteSyncing,
     isReadSyncing,
-    readSyncProgress.status,
+    readSyncProgress,
+    readStartDate,
+    readEndDate,
   ]);
 
   const handleNip07Login = useCallback(async () => {
@@ -291,6 +376,9 @@ function App() {
       setLoggedInUser(null);
     }
   }, []);
+
+  const writeRelayList = outboxRelays?.filter(isWriteRelay) || [];
+  const readRelayList = outboxRelays?.filter(isReadRelay) || [];
 
   // Render the UI
   return (
@@ -348,7 +436,7 @@ function App() {
       />
 
       {/* Sync Panel Component */}
-      <SyncPanel
+      {/* <SyncPanel
         outboxRelays={outboxRelays}
         decodedHex={decodedHex}
         writeSyncProgress={writeSyncProgress}
@@ -357,7 +445,50 @@ function App() {
         readSyncProgress={readSyncProgress}
         isReadSyncing={isReadSyncing}
         handleReadSync={handleReadSync}
-      />
+      /> */}
+      {outboxRelays && decodedHex && (
+        <div>
+          <strong>📤 NIP-65 Relays Found:</strong>
+          <div style={{ display: 'flex', marginTop: '1rem', gap: '1rem' }}>
+            {/* Write Sync Section */}
+            <SyncSection
+              title="Write Relay Sync"
+              targetRelayUrls={writeRelayList.map((r) => r.url)}
+              // canStartSync 조건은 handleWriteSync에서 처리하므로 단순화 가능
+              canStartSync={!!decodedHex && writeRelayList.length > 0}
+              pubkey={decodedHex}
+              syncProgress={writeSyncProgress}
+              isSyncing={isWriteSyncing || isReadSyncing}
+              onStartSync={handleWriteSync}
+              isDisabledByLimit={writeRelayList.length > MAX_WRITE_RELAYS}
+              // 날짜 상태 및 핸들러 전달
+              startDate={writeStartDate}
+              endDate={writeEndDate}
+              onStartDateChange={setWriteStartDate}
+              onEndDateChange={setWriteEndDate}
+              updateSyncProgress={setWriteSyncProgress}
+            />
+
+            {/* Read Sync Section */}
+            <SyncSection
+              title="Read Relay Sync"
+              targetRelayUrls={readRelayList.map((r) => r.url)}
+              canStartSync={!!decodedHex && readRelayList.length > 0}
+              pubkey={decodedHex}
+              syncProgress={readSyncProgress}
+              isSyncing={isWriteSyncing || isReadSyncing}
+              onStartSync={handleReadSync}
+              isDisabledByLimit={readRelayList.length > MAX_READ_RELAYS}
+              // 날짜 상태 및 핸들러 전달
+              startDate={readStartDate}
+              endDate={readEndDate}
+              onStartDateChange={setReadStartDate}
+              onEndDateChange={setReadEndDate}
+              updateSyncProgress={setReadSyncProgress}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Message if NIP-65 could not be fetched */}
       {!outboxRelays && decodedHex && !isDecoding && !decodeError && (
