@@ -9,6 +9,12 @@ interface SyncSectionProps {
   isSyncing: boolean;
   onStartSync: () => void;
   isDisabledByLimit: boolean;
+  // 추가된 Props
+  startDate: string;
+  endDate: string;
+  onStartDateChange: (date: string) => void;
+  onEndDateChange: (date: string) => void;
+  updateSyncProgress: (progress: SyncProgress) => void;
 }
 
 function SyncSection({
@@ -20,9 +26,29 @@ function SyncSection({
   isSyncing,
   onStartSync,
   isDisabledByLimit,
+  // 추가된 Props 받기
+  startDate,
+  endDate,
+  onStartDateChange,
+  onEndDateChange,
+  updateSyncProgress,
 }: SyncSectionProps) {
   const handleButtonClick = () => {
     onStartSync();
+  };
+
+  const handleStartDateChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    onStartDateChange(event.target.value);
+    updateSyncProgress({
+      status: 'idle',
+      message: 'start date changed',
+    });
+  };
+
+  const handleEndDateChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    onEndDateChange(event.target.value);
   };
 
   return (
@@ -62,7 +88,49 @@ function SyncSection({
           </ul>
         </div>
       )}
-
+      {/* --- Date Range Inputs--- */}
+      <div
+        style={{
+          marginBottom: '1rem',
+          display: 'flex',
+          gap: '1rem',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+        }}
+      >
+        <label
+          style={{
+            fontSize: '0.9em',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          Sync From (Newest):
+          <input
+            type="datetime-local"
+            value={startDate}
+            onChange={handleStartDateChange}
+            disabled={isSyncing}
+            style={{ marginLeft: '5px' }}
+          />
+        </label>
+        <label
+          style={{
+            fontSize: '0.9em',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          Sync Until (Oldest):
+          <input
+            type="datetime-local"
+            value={endDate}
+            onChange={handleEndDateChange}
+            disabled={isSyncing}
+            style={{ marginLeft: '5px' }}
+          />
+        </label>
+      </div>
       {/* Sync Button */}
       <button
         onClick={handleButtonClick}

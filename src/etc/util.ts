@@ -18,6 +18,15 @@ export const isReadRelay = (relayInfo: RelayInfo): boolean => {
   return relayInfo.type.includes('Read');
 };
 
+export const formatDateForInput = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
 // Fetches the user's NIP-65 relay list (kind:10002)
 export async function fetchOutboxRelays(
   ndk: NDK,
@@ -67,6 +76,8 @@ export async function syncEvents(
   ndk: NDK,
   targetRealyUrls: string[],
   filter: NDKFilter,
+  initialUntilTimestamp: number, // 시작할 Until 타임스탬프
+  syncStopAtTimestamp: number | undefined, // 멈출 타임스탬프
   updateProgress: (progress: SyncProgress) => void,
 ): Promise<boolean> {
   if (targetRealyUrls.length === 0) {
@@ -81,7 +92,7 @@ export async function syncEvents(
   const relaySet = NDKRelaySet.fromRelayUrls(targetRealyUrls, ndk);
 
   // Initialize pagination timestamp and counters
-  let syncUntilTimestamp = Math.floor(Date.now() / 1000);
+  let syncUntilTimestamp = initialUntilTimestamp;
   const batchSize = 20; // Number of events to fetch per batch
   // Apply initial batchSize limit to the passed filter
   filter.limit = batchSize;
@@ -91,7 +102,8 @@ export async function syncEvents(
   updateProgress({
     status: 'fetching_batch', // Initial status before loop
     message: `Identified ${targetRealyUrls.length} target relays. Starting sync...`,
-    syncedUntilTimestamp: syncUntilTimestamp, // Set initial timestamp
+    syncedUntilTimestamp: syncUntilTimestamp,
+    stopAtTimestamp: syncStopAtTimestamp,
   });
   console.log(
     'Starting sync for filter:',
@@ -107,7 +119,8 @@ export async function syncEvents(
       updateProgress({
         status: 'fetching_batch',
         message: `Fetching max ${batchSize} notes before ${new Date(syncUntilTimestamp * 1000).toLocaleString()}... (Total synced: ${totalSyncedCount})`,
-        syncedUntilTimestamp: syncUntilTimestamp, // Pass current timestamp
+        syncedUntilTimestamp: syncUntilTimestamp,
+        stopAtTimestamp: syncStopAtTimestamp,
       });
 
       // Update filter for pagination
@@ -144,6 +157,7 @@ export async function syncEvents(
           status: 'error',
           message: `Error fetching event batch.`,
           syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp
+          stopAtTimestamp: syncStopAtTimestamp,
           errorDetails: queryError.message || String(queryError), // Add error details
         });
         return false;
@@ -153,8 +167,9 @@ export async function syncEvents(
       if (eventsBeforeSliced.length === 0) {
         updateProgress({
           status: 'complete',
-          message: `Sync complete! No more older events found. Total synced: ${totalSyncedCount}`,
-          syncedUntilTimestamp: syncUntilTimestamp, // Keep the final timestamp
+          message: `Sync complete! No more older events found${syncStopAtTimestamp ? ' within range' : ''}. Total synced: ${totalSyncedCount}`,
+          syncedUntilTimestamp: syncUntilTimestamp, // Final 'until' value
+          stopAtTimestamp: syncStopAtTimestamp,
         });
         return true;
       }
@@ -185,6 +200,18 @@ export async function syncEvents(
 
       // Process each event in the fetched batch
       for (const event of events) {
+        // --- check within the loop for stopAt ---
+        // If user specified a stop time, and this event is older than that, stop processing this batch.
+        // This prevents syncing events slightly older than the requested 'end date' if they came in the same batch.
+        if (syncStopAtTimestamp && event.created_at < syncStopAtTimestamp) {
+          console.log(
+            `Event ${event.id.substring(0, 8)} (${event.created_at}) is older than stopAt timestamp (${syncStopAtTimestamp}). Stopping processing this batch.`,
+          );
+          // Mark that we potentially stopped mid-batch due to stopAt
+          // We'll handle completion outside the loop based on reachedStopAt flag
+          break; // Exit the 'for' loop for this batch
+        }
+        // --- End stopAt check ---
         // Update progress for the specific event being processed
         updateProgress({
           status: 'syncing_event',
@@ -265,9 +292,21 @@ export async function syncEvents(
         // Optional delay between publishing individual events within a batch to reduce load
         await new Promise((resolve) => setTimeout(resolve, 10_000)); // e.g., 10s delay
       } // End of for (const event of events) loop
-      // Update the timestamp for the next batch fetch
-      // Use the timestamp of the oldest event processed in this batch
-      syncUntilTimestamp = batchOldestTimestamp;
+      // Update timestamp for the next iteration *after* processing the loop
+      syncUntilTimestamp = batchOldestTimestamp - 1;
+
+      const reachedStopAt =
+        syncStopAtTimestamp && batchOldestTimestamp <= syncStopAtTimestamp;
+      if (reachedStopAt) {
+        // If the oldest processed event hit or passed the stop timestamp, consider it complete for the range
+        updateProgress({
+          status: 'complete',
+          message: `Sync complete! Reached the specified oldest date. Total synced: ${totalSyncedCount}`,
+          syncedUntilTimestamp: syncUntilTimestamp,
+          stopAtTimestamp: syncStopAtTimestamp,
+        });
+        return true;
+      }
 
       // Update progress after completing a batch successfully
       updateProgress({
