@@ -1,8 +1,8 @@
-import { RelayInfo, SyncProgress } from './types';
+import type { RelayInfo, SyncProgress } from './types';
 import { normalizeURL } from 'nostr-tools/utils';
 import NDK, {
   NDKEvent,
-  NDKFilter,
+  type NDKFilter,
   NDKKind,
   NDKPublishError,
   NDKRelaySet,
@@ -150,7 +150,7 @@ export async function syncEvents(
         console.log(
           `Fetched ${eventsBeforeSliced.length} events for batch before ${syncUntilTimestamp}`,
         );
-      } catch (queryError: any) {
+      } catch (queryError: unknown) {
         console.error('Error fetching event batch with querySync:', queryError);
         // Update progress on fetch error, preserving the last known timestamp
         updateProgress({
@@ -158,7 +158,10 @@ export async function syncEvents(
           message: `Error fetching event batch.`,
           syncedUntilTimestamp: syncUntilTimestamp, // Keep the timestamp
           stopAtTimestamp: syncStopAtTimestamp,
-          errorDetails: queryError.message || String(queryError), // Add error details
+          errorDetails:
+            queryError instanceof Error
+              ? queryError.message
+              : String(queryError), // Add error details
         });
         return false;
       }
@@ -256,7 +259,7 @@ export async function syncEvents(
         try {
           await event.publish(ndkRelayToPublish, 5_000, ndkRelayToPublish.size);
           totalSyncedCount++;
-        } catch (publishError: any) {
+        } catch (publishError: unknown) {
           let failedRelaysInfo = 'Unknown failure reason';
 
           if (publishError instanceof NDKPublishError) {
@@ -318,13 +321,13 @@ export async function syncEvents(
       // Optional delay between batches to avoid overwhelming relays
       await new Promise((resolve) => setTimeout(resolve, 10_000)); // e.g., 10s delay
     } // End of while(true) loop
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Catch any other unhandled errors in the sync process
     updateProgress({
       status: 'error',
       message: `Unhandled sync error.`,
       syncedUntilTimestamp: syncUntilTimestamp, // Try to keep timestamp if available
-      errorDetails: error.message || String(error), // Provide error details
+      errorDetails: error instanceof Error ? error.message : String(error), // Provide error details
     });
     console.error('Unhandled sync error:', error);
     allSynced = false;

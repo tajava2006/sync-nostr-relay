@@ -1,5 +1,3 @@
-import React from 'react';
-
 interface InputSectionProps {
   input: string;
   setInput: (value: string) => void;

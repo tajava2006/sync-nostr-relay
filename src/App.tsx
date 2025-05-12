@@ -1,6 +1,6 @@
 import { nip19 } from 'nostr-tools';
-import React, { useState, useCallback, useEffect } from 'react';
-import { RelayInfo, SyncProgress } from './etc/types';
+import { useState, useCallback, useEffect } from 'react';
+import type { RelayInfo, SyncProgress } from './etc/types';
 import {
   fetchOutboxRelays,
   isReadRelay,
@@ -13,7 +13,7 @@ import NDK, {
   NDKNip07Signer,
   NDKUser,
   NDKRelay,
-  NDKFilter,
+  type NDKFilter,
 } from '@nostr-dev-kit/ndk';
 import {
   DEFAULT_OLDEST_DATE_STR,
@@ -178,10 +178,14 @@ function App() {
           'Could not find or fetch NIP-65 relay list (kind:10002).',
         );
       }
-    } catch (e: any) {
-      setDecodeError(
-        `Decoding failed: ${e.message || 'Invalid NIP-19 string?'}`,
-      );
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        setDecodeError(
+          `Decoding failed: ${e.message || 'Invalid NIP-19 string?'}`,
+        );
+      } else {
+        setDecodeError('Decoding failed: Unknown error');
+      }
       setWriteSyncProgress({ status: 'idle', message: 'Decode failed.' });
       setReadSyncProgress({ status: 'idle', message: 'Decode failed.' });
     } finally {

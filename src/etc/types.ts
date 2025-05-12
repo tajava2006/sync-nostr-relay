@@ -1,4 +1,3 @@
-
 export interface RelayInfo {
   url: string;
   type: string;

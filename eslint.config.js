@@ -1,55 +1,36 @@
-// eslint.config.js
-import globals from "globals";
-import tseslint from "typescript-eslint";
-import pluginReact from "eslint-plugin-react";
-import pluginReactHooks from "eslint-plugin-react-hooks";
-import pluginJest from "eslint-plugin-jest";
-import eslintConfigPrettier from "eslint-config-prettier";
+import js from '@eslint/js';
+import globals from 'globals';
+import reactHooks from 'eslint-plugin-react-hooks';
+import reactRefresh from 'eslint-plugin-react-refresh';
+import tseslint from 'typescript-eslint';
+import prettier from 'eslint-config-prettier';
+import prettierPlugin from 'eslint-plugin-prettier'; // 추가
 
 export default tseslint.config(
+  { ignores: ['dist'] },
   {
-    ignores: ["node_modules/", "build/", "dist/", "*.config.js"],
-  },
-  tseslint.configs.base,
-  tseslint.configs.eslintRecommended,
-  {
-    files: ["src/**/*.{ts,tsx,js,jsx}"],
-    plugins: {
-      react: pluginReact,
-      'react-hooks': pluginReactHooks,
-    },
+    extends: [
+      js.configs.recommended,
+      ...tseslint.configs.recommended,
+      prettier,
+    ],
+    files: ['**/*.{ts,tsx}'],
     languageOptions: {
-      parserOptions: {
-        ecmaFeatures: { jsx: true },
-      },
-      globals: {
-        ...globals.browser,
-      },
+      ecmaVersion: 2020,
+      globals: globals.browser,
     },
-    settings: {
-      react: { version: "detect" },
+    plugins: {
+      'react-hooks': reactHooks,
+      'react-refresh': reactRefresh,
+      prettier: prettierPlugin,
     },
     rules: {
-      ...pluginReact.configs["jsx-runtime"].rules,
-      ...pluginReactHooks.configs.recommended.rules,
-      "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
-      "@typescript-eslint/no-explicit-any": "off",
-      "react/prop-types": "off",
+      ...reactHooks.configs.recommended.rules,
+      'react-refresh/only-export-components': [
+        'warn',
+        { allowConstantExport: true },
+      ],
+      'prettier/prettier': 'error',
     },
   },
-  {
-    files: ["src/**/*.test.{ts,tsx,js,jsx}"],
-    plugins: {
-      jest: pluginJest,
-    },
-    rules: {
-      ...pluginJest.configs.recommended.rules,
-    },
-    languageOptions: {
-      globals: {
-        ...globals.jest,
-      },
-    },
-  },
-  eslintConfigPrettier
 );

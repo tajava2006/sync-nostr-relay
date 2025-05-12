@@ -1,5 +1,3 @@
-import React from 'react';
-
 interface DecodedInfoSectionProps {
   decodedHex: string | null;
   profileRelays: string[] | null;
