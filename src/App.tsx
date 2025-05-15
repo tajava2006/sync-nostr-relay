@@ -23,6 +23,7 @@ import {
   MAX_WRITE_RELAYS,
 } from './etc/constant';
 import SyncSection from './components/SyncSection';
+import { init } from 'nostr-login';
 
 // Create NDK instance (outside component)
 const ndk = new NDK({
@@ -357,11 +358,7 @@ function App() {
 
   const handleNip07Login = useCallback(async () => {
     if (!window.nostr) {
-      console.error('NIP-07 Extension not found on login attempt.');
-      alert(
-        'NIP-07 compatible extension (like Alby, nos2x) not found. Please install one and refresh the page.',
-      );
-      return;
+      await init({});
     }
     try {
       const signer = new NDKNip07Signer();
@@ -410,10 +407,29 @@ function App() {
             {/* 로그아웃 버튼 등 */}
           </div>
         ) : (
-          // --- 항상 로그인 버튼 표시 ---
-          <button onClick={handleNip07Login}>
-            Login with Extension (NIP-07)
-          </button>
+          // --- 로그인 버튼 및 설명문 ---
+          <div>
+            <button onClick={handleNip07Login} style={{ marginRight: '10px' }}>
+              Login with Nostr (NIP-07 or NIP-46)
+            </button>
+            <p
+              style={{
+                fontSize: '0.85em',
+                color: '#555',
+                marginTop: '5px',
+                marginBottom: '0',
+              }}
+            >
+              Login is optional and not required for basic sync functionality.
+              <br />
+              It helps interact with relays that enforce stricter rate-limits or
+              require authentication (NIP-42) for non-authenticated clients.
+              <br />
+              If you don't have a browser extension (NIP-07), this will attempt
+              to use remote signing (NIP-46 via nostr-login).
+            </p>
+          </div>
+          // --- 로그인 버튼 및 설명문 끝 ---
         )}
       </div>
 
